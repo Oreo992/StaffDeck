@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,11 +11,9 @@ from app.config import get_settings
 from app.db.models import MCPServer, Tool
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool
+from app.tools.secret_refs import resolve_secret_reference, resolve_secret_references
 from app.tools.tool_schema import ToolCall, ToolError, ToolResult
 from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
-
-
-SECRET_PATTERN = re.compile(r"\$\{secret\.([A-Z0-9_]+)\}")
 
 
 class ToolExecutor:
@@ -136,7 +132,7 @@ class ToolExecutor:
                 config["cwd"] = server.cwd
         elif transport == "builtin":
             config["server"] = "builtin.demo"
-        return config
+        return resolve_secret_references(config)
 
     def _response_data(self, response: httpx.Response) -> Any:
         try:
@@ -175,10 +171,7 @@ class ToolExecutor:
         )
 
     def _resolve_secret(self, value: str) -> str:
-        def repl(match: re.Match[str]) -> str:
-            return os.getenv(match.group(1), "")
-
-        return SECRET_PATTERN.sub(repl, value)
+        return resolve_secret_reference(value)
 
     def _error(self, tool_name: str, code: str, message: str) -> ToolResult:
         return ToolResult(

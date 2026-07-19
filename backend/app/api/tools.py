@@ -32,6 +32,7 @@ from app.security.tenant import ensure_tenant
 from app.tools import ToolExecutor
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool, list_mcp_tools
+from app.tools.secret_refs import resolve_secret_references
 from app.tools.tool_schema import (
     MCPDiscoverRequest,
     MCPDiscoverResponse,
@@ -841,7 +842,7 @@ def sync_mcp_tools(
 
 
 def _discover_response(connection: MCPServerConnection) -> MCPDiscoverResponse:
-    config = _connection_to_client_config(connection)
+    config = resolve_secret_references(_connection_to_client_config(connection))
     try:
         tools = list_mcp_tools(config, timeout_seconds=get_settings().tool_timeout_seconds)
     except MCPClientError as exc:

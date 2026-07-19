@@ -31,3 +31,30 @@ curl --fail http://127.0.0.1:18173/api/health
 After the first launch, rotate the seeded `admin` account password before exposing the
 application publicly. Keep the replacement credential in a private server-side credential
 file, not in Git.
+
+## Import Agent Team capabilities
+
+The migration imports Agent Team employee personas, canonical `SKILL.md` packages,
+deterministic node-based SOPs, read-only SellerSprite/Sorftime MCP tools, resource bindings,
+and the preview's default RC model binding. It does not create a GitHub pull request.
+
+Configure secret references in the private environment, recreate the preview app so it reads
+them, then run the importer in a one-off container:
+
+```bash
+cd /opt/staffdeck-preview
+python3 deploy/preview/configure_agent_team_secrets.py
+docker compose -f deploy/preview/compose.yaml up -d --force-recreate app
+docker run --rm --network host --user 0:0 \
+  -v /opt/cc-platform:/opt/cc-platform:ro \
+  -v /data/staffdeck-preview/login-credentials.json:/run/secrets/login.json:ro \
+  staffdeck-preview:${STAFFDECK_IMAGE_TAG:-local} \
+  python -m app.agent_team_migration \
+    --source-root /opt/cc-platform \
+    --credential-file /run/secrets/login.json \
+    --apply
+```
+
+Run without `--apply` first to get deterministic inventory counts and the manifest hash.
+External script-backed capabilities remain draft until a StaffDeck-native tool adapter exists;
+the importer never copies source credentials into skill packages.

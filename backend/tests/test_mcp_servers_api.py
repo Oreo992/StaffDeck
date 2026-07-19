@@ -24,12 +24,46 @@ from app.tools.tool_schema import (
 )
 
 
+def test_mcp_secret_references_resolve_only_at_execution(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MCP_TOKEN", "runtime-token")
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            MCPServer(
+                id="mcp_secret_refs",
+                tenant_id="tenant_demo",
+                name="secret_refs",
+                transport="streamable_http",
+                url="https://example.com/mcp?key=${secret.TEST_MCP_TOKEN}",
+                headers_json={"Authorization": "Bearer ${secret.TEST_MCP_TOKEN}"},
+            )
+        )
+        db.commit()
+
+        row = db.get(MCPServer, "mcp_secret_refs")
+        assert row is not None
+        config = ToolExecutor(db)._server_client_config(row)  # noqa: SLF001
+
+        assert config["url"] == "https://example.com/mcp?key=runtime-token"
+        assert config["headers"] == {"Authorization": "Bearer runtime-token"}
+        assert row.url == "https://example.com/mcp?key=${secret.TEST_MCP_TOKEN}"
+        assert row.headers_json == {"Authorization": "Bearer ${secret.TEST_MCP_TOKEN}"}
+
+
 def _admin_user() -> User:
-    return User(id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test")
+    return User(
+        id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test"
+    )
 
 
 def _member_user() -> User:
-    return User(id="user_member", tenant_id="tenant_demo", username="member", role="member", password_hash="test")
+    return User(
+        id="user_member",
+        tenant_id="tenant_demo",
+        username="member",
+        role="member",
+        password_hash="test",
+    )
 
 
 def test_discover_builtin_mcp_server_lists_tools() -> None:
@@ -79,7 +113,11 @@ def test_discover_stdio_mcp_server_lists_tools() -> None:
 def test_sync_mcp_tools_imports_tools_and_executes() -> None:
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
-        db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
+        db.add(
+            AgentProfile(
+                id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True
+            )
+        )
         db.commit()
 
         server = create_mcp_server(
@@ -137,8 +175,16 @@ def test_sync_mcp_tools_imports_tools_and_executes() -> None:
 def test_sync_mcp_tools_scoped_to_employee_binds_privately() -> None:
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
-        db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
-        db.add(AgentProfile(id="agent_employee", tenant_id="tenant_demo", name="数字员工", is_overall=False))
+        db.add(
+            AgentProfile(
+                id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True
+            )
+        )
+        db.add(
+            AgentProfile(
+                id="agent_employee", tenant_id="tenant_demo", name="数字员工", is_overall=False
+            )
+        )
         db.commit()
 
         server = create_mcp_server(
@@ -165,10 +211,14 @@ def test_sync_mcp_tools_scoped_to_employee_binds_privately() -> None:
         assert imported is not None
 
         # 员工范围内同步应建立私有绑定，工具只对该员工可见，不出现在工具广场。
-        employee_tools = list_tools(tenant_id="tenant_demo", bucket=None, agent_id="agent_employee", db=db)
+        employee_tools = list_tools(
+            tenant_id="tenant_demo", bucket=None, agent_id="agent_employee", db=db
+        )
         assert any(item.id == imported.id for item in employee_tools)
 
-        plaza_tools = list_tools(tenant_id="tenant_demo", bucket=None, agent_id="agent_overall", db=db)
+        plaza_tools = list_tools(
+            tenant_id="tenant_demo", bucket=None, agent_id="agent_overall", db=db
+        )
         assert all(item.id != imported.id for item in plaza_tools)
 
 
