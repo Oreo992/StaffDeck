@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 ARG NODE_IMAGE=node:22-bookworm-slim
 ARG PYTHON_IMAGE=python:3.11-slim
 
