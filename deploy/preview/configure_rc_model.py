@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the public NeoSpark StaffDeck preview without printing credentials."""
+"""Switch the live StaffDeck preview to the RC-backed Claude route."""
 
 from __future__ import annotations
 
@@ -8,29 +8,11 @@ import urllib.request
 from pathlib import Path
 
 
-BASE_URL = "https://preview.agentteam.neospark.cn"
+BASE_URL = "http://127.0.0.1:18173"
 TENANT_ID = "tenant_demo"
+TARGET_MODEL = "claude-opus-4-8"
+TARGET_NAME = "RC Claude Opus 4.8"
 CREDENTIAL_FILE = Path("/data/staffdeck-preview/login-credentials.json")
-EXPECTED_MODEL = "claude-opus-4-8"
-
-
-def request(
-    method: str,
-    path: str,
-    payload: dict[str, object] | None = None,
-    token: str | None = None,
-    timeout: int = 20,
-) -> tuple[int, str, bytes]:
-    headers: dict[str, str] = {}
-    body = None
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-        body = json.dumps(payload).encode("utf-8")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    target = urllib.request.Request(BASE_URL + path, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(target, timeout=timeout) as response:
-        return response.status, response.headers.get_content_type(), response.read()
 
 
 def request_json(
@@ -40,24 +22,26 @@ def request_json(
     token: str | None = None,
     timeout: int = 20,
 ) -> object:
-    status, _, body = request(method, path, payload, token, timeout)
-    if status != 200:
-        raise RuntimeError(f"Unexpected HTTP status for {path}: {status}")
-    return json.loads(body)
+    headers: dict[str, str] = {}
+    body = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(payload).encode("utf-8")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    target = urllib.request.Request(
+        BASE_URL + path,
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    with urllib.request.urlopen(target, timeout=timeout) as response:
+        return json.load(response)
 
 
 def main() -> None:
     credentials = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
     admin = next(item for item in credentials["accounts"] if item["username"] == "admin")
-
-    health = request_json("GET", "/api/health")
-    if health != {"status": "ok", "app": "StaffDeck"}:
-        raise RuntimeError("Unexpected health response")
-
-    status, content_type, html = request("GET", "/workspace/gallery")
-    if status != 200 or content_type != "text/html" or b"StaffDeck" not in html:
-        raise RuntimeError("Workspace gallery did not return the StaffDeck SPA")
-
     login = request_json(
         "POST",
         "/api/auth/login",
@@ -77,8 +61,19 @@ def main() -> None:
     if len(defaults) != 1:
         raise RuntimeError("Expected exactly one enabled default model")
     default_model = defaults[0]
-    if default_model.get("model") != EXPECTED_MODEL:
-        raise RuntimeError("Default model is not the expected RC-backed route")
+
+    updated = request_json(
+        "PUT",
+        f"/api/enterprise/model-configs/{default_model['id']}",
+        {
+            "tenant_id": TENANT_ID,
+            "name": TARGET_NAME,
+            "model": TARGET_MODEL,
+        },
+        token=token,
+    )
+    if updated.get("model") != TARGET_MODEL:
+        raise RuntimeError("StaffDeck did not persist the RC-backed model")
 
     test_result = request_json(
         "POST",
@@ -88,12 +83,8 @@ def main() -> None:
         timeout=660,
     )
     if not test_result.get("success"):
-        raise RuntimeError("Default model connectivity test failed")
-
-    print(
-        "StaffDeck preview verification PASS "
-        f"model={default_model['model']} provider={default_model['provider']}"
-    )
+        raise RuntimeError("RC-backed model connectivity test failed")
+    print(f"Configured RC-backed StaffDeck model PASS model={TARGET_MODEL}")
 
 
 if __name__ == "__main__":

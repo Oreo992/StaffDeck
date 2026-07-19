@@ -15,6 +15,7 @@ APP_DATA_DIR = STATE_DIR / "app"
 ENV_FILE = STATE_DIR / "backend.env"
 CONTAINER_UID = 10001
 CONTAINER_GID = 10001
+DEFAULT_MODEL_NAME = "claude-opus-4-8"
 
 
 def container_environment(container: str) -> dict[str, str]:
@@ -32,14 +33,39 @@ def container_environment(container: str) -> dict[str, str]:
     return values
 
 
+def upsert_environment_setting(path: Path, key: str, value: str) -> None:
+    replacement = f"{key}={json.dumps(value)}"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    updated: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.startswith(f"{key}="):
+            updated.append(replacement)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(replacement)
+
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(updated) + "\n")
+    os.replace(temporary, path)
+    path.chmod(0o600)
+
+
 def main() -> None:
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     APP_DATA_DIR.mkdir(mode=0o750, exist_ok=True)
     os.chown(APP_DATA_DIR, CONTAINER_UID, CONTAINER_GID)
 
     if ENV_FILE.exists():
-        ENV_FILE.chmod(0o600)
-        print(f"Private environment already exists: {ENV_FILE}")
+        upsert_environment_setting(ENV_FILE, "DEMO_MODEL_NAME", DEFAULT_MODEL_NAME)
+        print(f"Updated private environment defaults: {ENV_FILE}")
         return
 
     litellm_key = container_environment("litellm-proxy").get("LITELLM_MASTER_KEY", "")
@@ -50,7 +76,7 @@ def main() -> None:
         "APP_NAME": "StaffDeck Preview",
         "APP_SECRET": secrets.token_urlsafe(64),
         "DEMO_MODEL_BASE_URL": "http://host.docker.internal:4000/v1",
-        "DEMO_MODEL_NAME": "qwen3.6plus",
+        "DEMO_MODEL_NAME": DEFAULT_MODEL_NAME,
         "DEMO_MODEL_API_KEY": litellm_key,
         "MODEL_THINKING_MODE": "",
         "MODEL_THINKING_MODELS": "",
