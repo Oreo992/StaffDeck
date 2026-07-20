@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     general_skill_pip_index_url: str = ""
     general_skill_pip_timeout_seconds: int = 180
     general_skill_network_install: bool = False
+    html_artifact_upload_url: str = ""
+    html_artifact_public_url_prefix: str = ""
+    html_artifact_timeout_seconds: float = 20.0
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),

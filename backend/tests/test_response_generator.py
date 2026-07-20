@@ -144,6 +144,33 @@ def test_clarify_does_not_leak_internal_router_prompt(monkeypatch):
     assert "路由" not in reply
 
 
+def test_html_delivery_request_does_not_reuse_ask_user_reply(monkeypatch):
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        assert payload["delivery_request"]["format"] == "html"
+        assert payload["delivery_request"]["must_deliver_now"] is True
+        return "完整报告：当前数据不足的部分已按市场估算并明确标注。"
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_text", fake_generate_text)
+
+    reply = ResponseGenerator().generate(
+        message="不用补数据，直接整理成 HTML",
+        session=ChatSession(id="session_test", tenant_id="tenant_demo"),
+        skill=None,
+        router_decision=RouterDecision(decision="continue_active"),
+        step_result=StepAgentResult(action="ask_user", reply="请补充广告数据"),
+        tool_result=None,
+        model_config=None,  # type: ignore[arg-type]
+        conversation_context={"recent_messages": [{"role": "assistant", "content": "已有分析"}]},
+    )
+
+    assert reply.startswith("完整报告")
+    assert "请补充广告数据" not in reply
+
+
 def test_tool_result_reply_is_model_driven(monkeypatch):
     def fake_init(self, model_config):  # noqa: ANN001
         return None

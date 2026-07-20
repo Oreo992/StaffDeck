@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils';
 import logoMark from '../assets/LOGO.svg';
 
 export type BrandLogoProps = {
-  /** Hide the Agent Team wordmark and only render the NeoSpark logo mark. */
+  /** Hide the NeoSpark wordmark and only render the logo mark. */
   markOnly?: boolean;
   /** Size of the square logo mark in pixels. */
   markSize?: number;
@@ -11,7 +11,7 @@ export type BrandLogoProps = {
   wordmarkClassName?: string;
 };
 
-/** NeoSpark logo mark with the Agent Team product wordmark. */
+/** NeoSpark brand mark. Product naming lives outside the logo area. */
 export default function BrandLogo({
   markOnly = false,
   markSize = 28,
@@ -27,14 +27,14 @@ export default function BrandLogo({
         style={{ width: markSize, height: markSize }}
       />
       {!markOnly && (
-        <span className={cn('flex min-w-0 flex-col items-start gap-[2px] leading-none', wordmarkClassName)}>
-          <span className="text-[8px] font-semibold tracking-[0.14em] text-[#757f9c]">
-            NEOSPARK
-          </span>
-          <strong className="whitespace-nowrap text-[16px] font-semibold leading-none text-[#18181a]">
-            Agent Team
-          </strong>
-        </span>
+        <strong
+          className={cn(
+            'whitespace-nowrap text-[13px] font-semibold tracking-[0.14em] text-[#373b49]',
+            wordmarkClassName,
+          )}
+        >
+          NEOSPARK
+        </strong>
       )}
     </span>
   );

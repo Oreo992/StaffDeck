@@ -4,6 +4,7 @@ import re
 from collections.abc import Iterator
 
 from app import paths
+from app.artifacts.html_delivery import is_html_delivery_request
 from app.core.context_projection import (
     compact_citation_hints,
     compact_current_step,
@@ -79,7 +80,9 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> str:
-        if self._can_use_step_reply_directly(step_result, tool_result, task_results):
+        if not is_html_delivery_request(message) and self._can_use_step_reply_directly(
+            step_result, tool_result, task_results
+        ):
             return step_result.reply.strip()
         raw_payload = self._payload(
             message,
@@ -121,7 +124,9 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> Iterator[str]:
-        if self._can_use_step_reply_directly(step_result, tool_result, task_results):
+        if not is_html_delivery_request(message) and self._can_use_step_reply_directly(
+            step_result, tool_result, task_results
+        ):
             yield from self.chunk_text(step_result.reply or "")
             return
         raw_payload = self._payload(
@@ -212,17 +217,25 @@ class ResponseGenerator:
         task_results: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         projected_task_results = self._project_task_results(task_results)
+        delivery_request = (
+            {"format": "html", "must_deliver_now": True}
+            if is_html_delivery_request(message)
+            else None
+        )
         if projected_task_results:
-            return {
+            payload: dict[str, object] = {
                 "user_message": message,
                 "conversation_context": (
                     conversation_context if isinstance(conversation_context, dict) else {}
                 ),
                 "task_results": projected_task_results,
             }
+            if delivery_request:
+                payload["delivery_request"] = delivery_request
+            return payload
         knowledge_context = self._current_knowledge_context(message, session, step_result)
         compact_knowledge = compact_knowledge_context(knowledge_context)
-        return {
+        payload = {
             "user_message": message,
             "conversation_context": (
                 conversation_context if isinstance(conversation_context, dict) else {}
@@ -242,6 +255,9 @@ class ResponseGenerator:
             ),
             "response_rules": skill.content_json.get("response_rules", []) if skill else [],
         }
+        if delivery_request:
+            payload["delivery_request"] = delivery_request
+        return payload
 
     def _project_task_results(
         self, task_results: list[dict[str, object]] | None

@@ -22,6 +22,8 @@ services:
       CORS_ORIGINS: https://preview.agentteam.neospark.cn
       GENERAL_SKILL_RUNTIME_VENV: /data/general-skill-venv
       GENERAL_SKILL_NETWORK_INSTALL: "false"
+      HTML_ARTIFACT_UPLOAD_URL: http://host.docker.internal:9900/api/upload
+      HTML_ARTIFACT_PUBLIC_URL_PREFIX: https://agent.neospark.cn/files/
     extra_hosts:
       - host.docker.internal:${STAFFDECK_HOST_GATEWAY:-192.168.32.1}
     ports:

@@ -22,6 +22,7 @@ from app.agents.branching import (
     visible_skill,
     visible_tool_rows,
 )
+from app.artifacts.html_delivery import HtmlArtifactPublisher, is_html_delivery_request
 from app.core.conversation_context import build_conversation_context
 from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancelled
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
@@ -255,6 +256,7 @@ class AgentLoop:
         self.step_agent = StepAgent()
         self.reflection_agent = ReflectionAgent()
         self.response_generator = ResponseGenerator()
+        self.html_artifacts = HtmlArtifactPublisher()
         self.general_skill_selector = GeneralSkillSelector()
         self.general_skill_runner = GeneralSkillRunner()
         self.tool_executor = ToolExecutor(db)
@@ -2760,7 +2762,7 @@ class AgentLoop:
         conversation_context: dict[str, object],
         task_results: list[dict[str, object]] | None = None,
     ) -> str:
-        return self.response_generator.generate(
+        reply = self.response_generator.generate(
             message,
             chat_session,
             active_skill,
@@ -2773,6 +2775,7 @@ class AgentLoop:
             conversation_context,
             task_results,
         )
+        return self._with_html_artifact(message, chat_session, reply)
 
     def _generate_reply_stream_segment(
         self,
@@ -2788,7 +2791,8 @@ class AgentLoop:
         conversation_context: dict[str, object],
         task_results: list[dict[str, object]] | None = None,
     ) -> Iterator[str]:
-        yield from self.response_generator.generate_stream(
+        chunks: list[str] = []
+        for chunk in self.response_generator.generate_stream(
             message,
             chat_session,
             active_skill,
@@ -2800,7 +2804,43 @@ class AgentLoop:
             memory_context,
             conversation_context,
             task_results,
+        ):
+            chunks.append(chunk)
+            yield chunk
+        reply = "".join(chunks)
+        delivered = self._with_html_artifact(message, chat_session, reply)
+        if delivered != reply:
+            yield delivered[len(reply) :]
+
+    def _with_html_artifact(
+        self, message: str, chat_session: ChatSession, reply: str
+    ) -> str:
+        if not is_html_delivery_request(message):
+            return reply
+        if not self.html_artifacts.enabled:
+            return (
+                f"{reply.rstrip()}\n\n"
+                "HTML 公网发布服务尚未配置，本次未生成链接。"
+            )
+        title = str(getattr(chat_session, "title", "") or "Agent Team 报告").strip()
+        artifact_id = f"{chat_session.id}-{new_id('artifact')}"
+        try:
+            url = self.html_artifacts.publish(title, reply, artifact_id)
+        except Exception as exc:
+            self.events.record(
+                chat_session.tenant_id,
+                chat_session.id,
+                "html_artifact_publish_failed",
+                {"error_type": type(exc).__name__},
+            )
+            return f"{reply.rstrip()}\n\nHTML 文件发布失败，本次未生成链接，请重试。"
+        self.events.record(
+            chat_session.tenant_id,
+            chat_session.id,
+            "html_artifact_published",
+            {"url": url},
         )
+        return f"{reply.rstrip()}\n\nHTML 报告公网链接：[打开 HTML 报告]({url})"
 
     def _task_response_context(
         self,

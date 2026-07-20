@@ -9,6 +9,7 @@ from app.agent_team_migration import (
     LEGACY_PATH_PATTERN,
     SOP_TEMPLATES,
     _safe_text,
+    _sanitize_persona,
     compile_manifest,
 )
 from app.skills.skill_schema import SkillCard
@@ -52,6 +53,24 @@ def test_all_curated_sops_are_valid_staffdeck_graphs() -> None:
         assert card.nodes
         assert card.start_node_id == card.nodes[0].node_id
         assert card.terminal_node_ids == [card.nodes[-1].node_id]
+
+
+def test_ads_sop_only_blocks_on_identity_fields() -> None:
+    content = SOP_TEMPLATES["cc-ads"]
+    collect = next(node for node in content["nodes"] if node["node_id"] == "collect_metrics")
+
+    assert collect["expected_user_info"] == ["marketplace", "asin"]
+    assert content["required_info"] == ["asin", "marketplace"]
+    assert "默认" in collect["instruction"]
+
+
+def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() -> None:
+    result = _sanitize_persona("原始员工说明", "cc-ads")
+
+    assert "HTML" in result
+    assert "公网链接" in result
+    assert "不得声称" in result
+    assert "非关键" in result
 
 
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")

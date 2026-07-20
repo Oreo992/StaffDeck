@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.0.0"
+MIGRATION_VERSION = "1.0.1"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -355,8 +355,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_metrics",
                 "收集广告数据",
-                "确认站点、ASIN、时间窗、预算、曝光、点击、订单、花费、销售额和目标。",
-                expected=["marketplace", "asin", "date_range", "ad_metrics"],
+                "确认站点和 ASIN；时间窗默认近 30 天，预算、广告指标和目标缺失时按现有市场数据先输出估算版并标注假设，不得阻塞交付。",
+                expected=["marketplace", "asin"],
             ),
             _node(
                 "fetch_context",
@@ -566,7 +566,10 @@ def _safe_text(text: str, sensitive_values: set[str] | None = None) -> str:
     text = SECRET_ENV_DEFAULT_PATTERN.sub(r'\1""\2', text)
     text = SECRET_ASSIGNMENT_PATTERN.sub(r'\1""', text)
     text = LEGACY_PATH_PATTERN.sub("$SKILL_WORKSPACE", text)
-    text = text.replace("mcp__studio__studio_report", "Agent Team 当前会话输出")
+    text = text.replace(
+        "mcp__studio__studio_report",
+        "平台 HTML 成品发布能力（仅在用户明确要求时生成并附上真实公网链接）",
+    )
     text = text.replace("$TASK_DIR", "当前会话工作目录")
     return text
 
@@ -578,7 +581,9 @@ def _sanitize_persona(text: str, source_id: str, sensitive_values: set[str] | No
         "仅使用 Agent Team 当前绑定并显示可用的 SOP、通用技能、知识库和工具。"
         "Agent Team 当前不支持跨员工自动派单；不得声称已调用、等待或收到其他员工结果。"
         "需要其他角色协作时，输出清晰的交接 Brief，由用户选择下一位员工。"
-        "外部数据必须来自本轮真实工具结果；写操作或对外发送必须先取得用户确认。\n\n"
+        "外部数据必须来自本轮真实工具结果；写操作或对外发送必须先取得用户确认。"
+        "当用户明确要求 HTML 成品时，必须用现有信息直接形成完整报告；非关键数据缺失时采用并标注默认值或估算，不得反复追问。"
+        "HTML 由平台发布并追加真实公网链接；看到链接前不得声称已发送、已上传或已生成文件。\n\n"
     )
     return compatibility + _safe_text(text, sensitive_values).lstrip()
 
