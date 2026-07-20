@@ -2,15 +2,18 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 ARG PYTHON_IMAGE=python:3.11-slim
 
 FROM ${NODE_IMAGE} AS frontend-build
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /src
 
 COPY frontend-enterprise/package.json frontend-enterprise/package-lock.json ./frontend-enterprise/
-RUN npm --prefix frontend-enterprise ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm --prefix frontend-enterprise ci --registry "${NPM_REGISTRY}"
 
 COPY frontend-enterprise ./frontend-enterprise
 RUN npm --prefix frontend-enterprise run build
 
 FROM ${PYTHON_IMAGE} AS runtime
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -25,7 +28,8 @@ RUN groupadd --gid 10001 staffdeck \
 
 WORKDIR /app
 COPY backend ./backend
-RUN python -m pip install --no-cache-dir ./backend
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --index-url "${PIP_INDEX_URL}" ./backend
 
 COPY --from=frontend-build /src/frontend-enterprise/dist ./frontend-enterprise/dist
 

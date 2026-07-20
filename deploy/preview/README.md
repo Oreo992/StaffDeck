@@ -16,6 +16,11 @@ NeoSpark services.
 The private environment file must be mode `0600` and must never be committed. It needs a
 random `APP_SECRET` plus an OpenAI-compatible model URL, model name, and API key.
 
+Docker builds default to the DaoCloud base-image proxy, npmmirror for npm packages, and the
+Aliyun PyPI mirror. Override `NODE_IMAGE`, `PYTHON_IMAGE`, `NPM_REGISTRY`, or `PIP_INDEX_URL`
+at build time when a mirror is unavailable; BuildKit caches npm and pip downloads between
+source-only rebuilds.
+
 ## Deploy or update
 
 ```bash
