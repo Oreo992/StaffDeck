@@ -301,7 +301,7 @@ SOP_TEMPLATES = {
             _node(
                 "fetch_secondary",
                 "按需交叉验证",
-                "仅在主数据不足或问题涉及历史、TikTok、Walmart、1688 时调用 Sorftime/Keepa。",
+                "当用户要求 HTML/网页看板时，对已识别的每个 ASIN 调用 at_sellersprite.keepa_info 获取近 90 天真实历史：startTimestamp=当前时间减90天、endTimestamp=当前时间、dailyLatest=true、returnFields=asin,price,bsr,rating,reviews；没有返回历史就明确标缺口，不得伪造趋势。其他情况仅在主数据不足或问题涉及历史、TikTok、Walmart、1688 时调用 Sorftime/Keepa。",
                 node_type="tool_call",
                 actions=[
                     "continue_flow",

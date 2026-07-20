@@ -6,10 +6,12 @@ import re
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+from app.artifacts.amazon_dashboard import build_amazon_dashboard_blocks
 from app.config import get_settings
 
 
@@ -118,7 +120,6 @@ def _matrix_block(
         "type": "matrix_table",
         "title": title or "关键指标对比",
         "columns": [
-            {"key": "dim", "label": "对比维度"},
             {"key": "asin_1", "label": labels[0]},
             {"key": "asin_2", "label": labels[1]},
         ],
@@ -182,8 +183,16 @@ def _dashboard_blocks(content: str, message: str) -> list[dict[str, object]]:
     return blocks
 
 
-def dashboard_payload(title: str, content: str, message: str = "") -> dict[str, object]:
+def dashboard_payload(
+    title: str,
+    content: str,
+    message: str = "",
+    *,
+    tool_results: list[dict[str, Any]] | None = None,
+) -> dict[str, object]:
     safe_title = title.strip() or "Agent Team 报告"
+    analysis_blocks = _dashboard_blocks(content.strip(), message)
+    rich_blocks = build_amazon_dashboard_blocks(tool_results or [], analysis_blocks)
     return {
         "eyebrow": "AGENT TEAM REPORT",
         "title": safe_title,
@@ -191,11 +200,17 @@ def dashboard_payload(title: str, content: str, message: str = "") -> dict[str, 
         "date": datetime.now(UTC).strftime("%Y-%m-%d"),
         "author": "Agent Team",
         "source": "Agent Team 工具与分析结果",
-        "blocks": _dashboard_blocks(content.strip(), message),
+        "blocks": rich_blocks or analysis_blocks,
     }
 
 
-def render_html_report(title: str, content: str, message: str = "") -> str:
+def render_html_report(
+    title: str,
+    content: str,
+    message: str = "",
+    *,
+    tool_results: list[dict[str, Any]] | None = None,
+) -> str:
     """Inject structured report data into the original executive dashboard template."""
     safe_title = html.escape(title.strip() or "Agent Team 报告")
     template = _dashboard_template().replace("__TITLE__", safe_title)
@@ -204,7 +219,9 @@ def render_html_report(title: str, content: str, message: str = "") -> str:
     if not separator:
         raise RuntimeError("executive HTML dashboard data slot is missing")
     payload = json.dumps(
-        dashboard_payload(title, content, message), ensure_ascii=False, indent=2
+        dashboard_payload(title, content, message, tool_results=tool_results),
+        ensure_ascii=False,
+        indent=2,
     ).replace("<", "\\u003c")
     document = head + _SCRIPT_OPEN + payload + _SCRIPT_CLOSE + after_close
     return _TEMPLATE_MARKER + document
@@ -239,12 +256,18 @@ class HtmlArtifactPublisher:
         artifact_id: str,
         *,
         message: str = "",
+        tool_results: list[dict[str, Any]] | None = None,
     ) -> str:
         if not self.enabled:
             raise RuntimeError("HTML artifact publishing is not configured")
         safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", artifact_id).strip("-")[-48:]
         filename = f"agent-team-{safe_id or 'report'}.html"
-        document = render_html_report(title, content, message).encode("utf-8")
+        document = render_html_report(
+            title,
+            content,
+            message,
+            tool_results=tool_results,
+        ).encode("utf-8")
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.post(
                 self.upload_url,

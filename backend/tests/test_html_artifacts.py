@@ -8,6 +8,7 @@ import pytest
 
 from app.artifacts.html_delivery import (
     HtmlArtifactPublisher,
+    dashboard_payload,
     is_html_delivery_request,
     render_html_report,
 )
@@ -80,7 +81,6 @@ def test_rendered_report_maps_analysis_to_original_dashboard_blocks() -> None:
     ]
     matrix = payload["blocks"][2]
     assert [column["label"] for column in matrix["columns"]] == [
-        "对比维度",
         "B0DNK7RHZS",
         "B0GJSDGY7N",
     ]
@@ -89,6 +89,130 @@ def test_rendered_report_maps_analysis_to_original_dashboard_blocks() -> None:
         "asin_1": "$66.46",
         "asin_2": "$79.99",
     }
+
+
+def _amazon_tool_results(*, include_history: bool = True) -> list[dict[str, object]]:
+    details = [
+        {
+            "asin": "B0DNK7RHZS",
+            "title": "FEPPO Corded Mattress Vacuum",
+            "brand": "FEPPO",
+            "sellerName": "FEPPO-LIFESTYLE",
+            "asinUrl": "https://www.amazon.com/dp/B0DNK7RHZS",
+            "zoomImageUrl": "https://m.media-amazon.com/images/I/41HSUHC4kPL._AC_US600_.jpg",
+            "imageUrl": "https://m.media-amazon.com/images/I/41HSUHC4kPL._AC_US200_.jpg",
+            "price": 66.46,
+            "rating": 4.4,
+            "ratings": 1750,
+            "reviews": 731,
+            "bsrRank": 7917,
+            "bsrLabel": "Home & Kitchen",
+            "subcategories": [{"rank": 21, "label": "Handheld Vacuums"}],
+            "nodeLabelPath": "Home & Kitchen:Vacuums:Handheld Vacuums",
+            "lqs": 100,
+            "weight": "3.8 pounds",
+            "dimensions": '11.9"L x 9.84"W x 7.67"H',
+            "fulfillment": "FBA",
+            "features": ["16Kpa suction", "140°F drying", "HEPA filtration"],
+            "overviews": '{"Power Source":"Corded Electric"}',
+            "badge": {"amazonChoice": "N", "ebc": "Y", "video": "Y"},
+        },
+        {
+            "asin": "B0GJSDGY7N",
+            "title": "FEPPO Cordless Mattress Vacuum",
+            "brand": "FEPPO",
+            "sellerName": "FEPPO-LIFESTYLE",
+            "asinUrl": "https://www.amazon.com/dp/B0GJSDGY7N",
+            "zoomImageUrl": "https://m.media-amazon.com/images/I/51kTanHhlML._AC_US600_.jpg",
+            "imageUrl": "https://m.media-amazon.com/images/I/51kTanHhlML._AC_US200_.jpg",
+            "price": 79.99,
+            "rating": 4.6,
+            "ratings": 107,
+            "reviews": 81,
+            "bsrRank": 45507,
+            "bsrLabel": "Home & Kitchen",
+            "subcategories": [{"rank": 69, "label": "Handheld Vacuums"}],
+            "nodeLabelPath": "Home & Kitchen:Vacuums:Handheld Vacuums",
+            "lqs": 99,
+            "weight": "2.9 pounds",
+            "dimensions": '9.84"L x 9.84"W x 5.11"H',
+            "fulfillment": "FBA",
+            "features": ["18Kpa suction", "Cordless", "Dust sensor"],
+            "overviews": '{"Power Source":"Battery Powered"}',
+            "badge": {"amazonChoice": "Y", "ebc": "Y", "video": "Y"},
+        },
+    ]
+    results: list[dict[str, object]] = [
+        {
+            "tool_name": "at_sellersprite.asin_detail",
+            "arguments": {"marketplace": "US", "asin": detail["asin"]},
+            "success": True,
+            "data": {"code": "OK", "data": detail},
+        }
+        for detail in details
+    ]
+    if include_history:
+        for index, detail in enumerate(details):
+            results.append(
+                {
+                    "tool_name": "at_sellersprite.keepa_info",
+                    "arguments": {"marketplace": "US", "asin": detail["asin"]},
+                    "success": True,
+                    "data": {
+                        "code": "OK",
+                        "data": {
+                            "asin": detail["asin"],
+                            "price": [
+                                {"timePoint": 1783000000000, "value": 70 + index},
+                                {"timePoint": 1782000000000, "value": 80 + index},
+                            ],
+                            "bsr": [
+                                {"timePoint": 1783000000000, "value": 8000 + index},
+                                {"timePoint": 1782000000000, "value": 9000 + index},
+                            ],
+                        },
+                    },
+                }
+            )
+    return results
+
+
+def test_structured_amazon_results_create_native_rich_dashboard_blocks() -> None:
+    payload = dashboard_payload(
+        "ASIN 深度对比",
+        "HTML 成品正在生成，稍后会附上链接。\n\n【核心判断】无线款产品力更强。",
+        "对比 B0DNK7RHZS、B0GJSDGY7N，以 HTML 格式呈现",
+        tool_results=_amazon_tool_results(),
+    )
+    serialized = json.dumps(payload, ensure_ascii=False)
+    block_types = [block["type"] for block in payload["blocks"]]
+
+    assert "HTML 成品正在生成" not in serialized
+    assert block_types[:3] == ["kpi_row", "callout", "product_grid"]
+    assert "matrix_table" in block_types
+    product_grid = next(block for block in payload["blocks"] if block["type"] == "product_grid")
+    assert len(product_grid["items"]) == 2
+    assert product_grid["items"][0]["image_url"].endswith("_AC_US600_.jpg")
+    chart_grids = [block for block in payload["blocks"] if block["type"] == "chart_grid"]
+    charts = [chart for block in chart_grids for chart in block["charts"]]
+    assert {chart["type"] for chart in charts} >= {"line", "bar-v", "bar-h", "radar"}
+    assert any("90 天" in block["title"] for block in chart_grids)
+    radar = next(chart for chart in charts if chart["type"] == "radar")
+    assert all(indicator["max"] == 100 for indicator in radar["indicators"])
+
+
+def test_dashboard_does_not_invent_trend_charts_without_keepa_results() -> None:
+    payload = dashboard_payload(
+        "ASIN 深度对比",
+        "【核心判断】先按静态数据对比。",
+        "以 HTML 格式呈现",
+        tool_results=_amazon_tool_results(include_history=False),
+    )
+
+    chart_grids = [block for block in payload["blocks"] if block["type"] == "chart_grid"]
+    assert not any("90 天" in block["title"] for block in chart_grids)
+    notes = next(block for block in payload["blocks"] if block["type"] == "source_notes")
+    assert "未取得 Keepa" in json.dumps(notes, ensure_ascii=False)
 
 
 def test_publisher_uploads_html_and_returns_validated_public_url(monkeypatch) -> None:
@@ -172,9 +296,12 @@ def test_agent_loop_appends_a_real_clickable_link_even_if_model_claimed_one() ->
         def __init__(self) -> None:
             self.calls = 0
 
-        def publish(self, title, content, artifact_id, *, message=""):  # noqa: ANN001
+        def publish(  # noqa: ANN001
+            self, title, content, artifact_id, *, message="", tool_results=None
+        ):
             self.calls += 1
             assert message == "整理成 HTML"
+            assert tool_results == [{"tool_name": "demo", "success": True}]
             return "https://agent.neospark.cn/files/verified.html"
 
     class FakeEvents:
@@ -187,7 +314,11 @@ def test_agent_loop_appends_a_real_clickable_link_even_if_model_claimed_one() ->
 
     result = loop._with_html_artifact(
         "整理成 HTML",
-        ChatSession(id="session_test", tenant_id="tenant_demo"),
+        ChatSession(
+            id="session_test",
+            tenant_id="tenant_demo",
+            slots_json={"_tool_results": [{"tool_name": "demo", "success": True}]},
+        ),
         "报告正文（模型声称：https://agent.neospark.cn/files/made-up.html）",
     )
 

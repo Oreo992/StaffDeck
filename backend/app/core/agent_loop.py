@@ -2835,12 +2835,19 @@ class AgentLoop:
             )
         title = str(getattr(chat_session, "title", "") or "Agent Team 报告").strip()
         artifact_id = f"{chat_session.id}-{new_id('artifact')}"
+        stored_results = (chat_session.slots_json or {}).get(TOOL_RESULTS_SLOT)
+        tool_results = (
+            [item for item in stored_results if isinstance(item, dict)]
+            if isinstance(stored_results, list)
+            else []
+        )
         try:
             url = self.html_artifacts.publish(
                 title,
                 reply,
                 artifact_id,
                 message=message,
+                tool_results=tool_results,
             )
         except Exception as exc:
             self.events.record(

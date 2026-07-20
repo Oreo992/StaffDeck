@@ -98,6 +98,18 @@ def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() ->
     assert "不可逆" in result
 
 
+def test_amazon_research_fetches_real_history_for_html_dashboard() -> None:
+    secondary = next(
+        node
+        for node in SOP_TEMPLATES["cc-amz"]["nodes"]
+        if node["node_id"] == "fetch_secondary"
+    )
+
+    assert "HTML" in secondary["instruction"]
+    assert "keepa_info" in secondary["instruction"]
+    assert "不得伪造趋势" in secondary["instruction"]
+
+
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
 def test_every_migrated_agent_can_route_to_shared_amazon_research() -> None:
     manifest = compile_manifest(REAL_SOURCE, "demo-ecom")
