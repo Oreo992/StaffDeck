@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils';
 import logoMark from '../assets/LOGO.svg';
+import logoWordmark from '../assets/NEOSPARK_WORDMARK.svg';
 
 export type BrandLogoProps = {
   /** Hide the NeoSpark wordmark and only render the logo mark. */
@@ -11,7 +12,7 @@ export type BrandLogoProps = {
   wordmarkClassName?: string;
 };
 
-/** NeoSpark brand mark. Product naming lives outside the logo area. */
+/** Official NeoSpark brand artwork. Product naming lives outside the logo area. */
 export default function BrandLogo({
   markOnly = false,
   markSize = 28,
@@ -19,22 +20,21 @@ export default function BrandLogo({
   wordmarkClassName,
 }: BrandLogoProps) {
   return (
-    <span className={cn('flex items-center gap-[8px] overflow-hidden p-[4px]', className)}>
-      <img
-        src={logoMark}
-        alt="NeoSpark"
-        className="shrink-0"
-        style={{ width: markSize, height: markSize }}
-      />
-      {!markOnly && (
-        <strong
-          className={cn(
-            'whitespace-nowrap text-[13px] font-semibold tracking-[0.14em] text-[#373b49]',
-            wordmarkClassName,
-          )}
-        >
-          NEOSPARK
-        </strong>
+    <span className={cn('flex items-center overflow-hidden p-[4px]', className)}>
+      {markOnly ? (
+        <img
+          src={logoMark}
+          alt="NeoSpark"
+          className="shrink-0"
+          style={{ width: markSize, height: markSize }}
+        />
+      ) : (
+        <img
+          src={logoWordmark}
+          alt="NeoSpark"
+          className={cn('h-auto shrink-0', wordmarkClassName)}
+          style={{ width: Math.round(markSize * 4.77) }}
+        />
       )}
     </span>
   );

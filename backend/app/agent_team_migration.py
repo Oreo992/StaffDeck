@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.0.2"
+MIGRATION_VERSION = "1.0.3"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -558,6 +558,21 @@ SOP_TEMPLATES = {
 }
 
 
+# StaffDeck chats are opened against one employee and currently cannot hand work to
+# another employee automatically. Bind the team's read-only Amazon research flow to
+# every migrated employee so an ASIN research request can still use real data instead
+# of falling back to an answer-only turn. Each employee keeps their own primary SOP.
+SHARED_AMAZON_RESEARCH_SKILL_ID = SOP_TEMPLATES["cc-amz"]["skill_id"]
+SHARED_AMAZON_RESEARCH_TOOLS = (
+    "at_sellersprite.asin_detail",
+    "at_sellersprite.keyword_research",
+    "at_sellersprite.market_research",
+    "at_sellersprite.keepa_info",
+    "at_sorftime.product_trend",
+    "at_sorftime.product_reviews",
+)
+
+
 @dataclass(frozen=True)
 class SourceCard:
     source_id: str
@@ -757,10 +772,26 @@ def compile_manifest(source_root: Path, team_name: str = "demo-ecom") -> dict[st
                 ),
                 "metadata": metadata,
                 "general_skill_slugs": [f"agent-team-{name}" for name in required_skills],
-                "sop_skill_ids": [SOP_TEMPLATES[source_id]["skill_id"]]
-                if source_id in SOP_TEMPLATES
-                else [],
-                "tool_names": list(AGENT_TOOL_BINDINGS.get(source_id, [])),
+                "sop_skill_ids": list(
+                    dict.fromkeys(
+                        [
+                            *(
+                                [SOP_TEMPLATES[source_id]["skill_id"]]
+                                if source_id in SOP_TEMPLATES
+                                else []
+                            ),
+                            SHARED_AMAZON_RESEARCH_SKILL_ID,
+                        ]
+                    )
+                ),
+                "tool_names": list(
+                    dict.fromkeys(
+                        [
+                            *AGENT_TOOL_BINDINGS.get(source_id, []),
+                            *SHARED_AMAZON_RESEARCH_TOOLS,
+                        ]
+                    )
+                ),
             }
         )
 

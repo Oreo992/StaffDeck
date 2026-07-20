@@ -7,6 +7,8 @@ import pytest
 
 from app.agent_team_migration import (
     LEGACY_PATH_PATTERN,
+    SHARED_AMAZON_RESEARCH_SKILL_ID,
+    SHARED_AMAZON_RESEARCH_TOOLS,
     SOP_TEMPLATES,
     _safe_text,
     _sanitize_persona,
@@ -94,6 +96,16 @@ def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() ->
     assert "非关键" in result
     assert "先交付可用首版" in result
     assert "不可逆" in result
+
+
+@pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
+def test_every_migrated_agent_can_route_to_shared_amazon_research() -> None:
+    manifest = compile_manifest(REAL_SOURCE, "demo-ecom")
+
+    for agent in manifest["agents"]:
+        assert SHARED_AMAZON_RESEARCH_SKILL_ID in agent["sop_skill_ids"]
+        assert set(SHARED_AMAZON_RESEARCH_TOOLS).issubset(agent["tool_names"])
+        assert len(agent["sop_skill_ids"]) == (1 if agent["source_id"] == "cc-amz" else 2)
 
 
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
