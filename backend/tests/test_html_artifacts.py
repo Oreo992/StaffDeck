@@ -43,6 +43,15 @@ def test_rendered_report_escapes_model_content() -> None:
     assert "executive-html-dashboard" in html
 
 
+def test_rendered_report_keeps_native_charts_responsive_on_mobile() -> None:
+    html = render_html_report("移动端报告", "【核心判断】验证响应式图表。")
+
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in html
+    assert "@media (max-width: 640px)" in html
+    assert "new ResizeObserver" in html
+    assert "chartResizeObserver?.observe(el)" in html
+
+
 def test_rendered_report_maps_analysis_to_original_dashboard_blocks() -> None:
     content = """【局限声明】数据来自 SellerSprite，统计截至今日。
 

@@ -268,14 +268,15 @@
   /* ── CHARTS ───────────────────────────────────────── */
   .chart-row {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
+    min-width: 0;
   }
-  .chart-row.two-col   { grid-template-columns: 1fr 1fr; }
-  .chart-row.three-col { grid-template-columns: 1fr 1fr 1fr; }
+  .chart-row.two-col   { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-row.three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   @media (max-width: 900px) {
     .chart-row.two-col,
-    .chart-row.three-col { grid-template-columns: 1fr; }
+    .chart-row.three-col { grid-template-columns: minmax(0, 1fr); }
   }
   .chart-cell {
     background: var(--surface-2);
@@ -283,6 +284,7 @@
     border-radius: var(--radius);
     padding: 16px 18px 12px;
     min-height: 300px;
+    min-width: 0;
   }
   .chart-cell h4 {
     font-size: 13px;
@@ -294,6 +296,8 @@
 
   /* ── TABLES ───────────────────────────────────────── */
   .table-wrap {
+    width: 100%;
+    max-width: 100%;
     overflow-x: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -408,8 +412,9 @@
   /* ── PRODUCT GRID (Amazon-specific) ───────────────── */
   .product-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
     gap: 14px;
+    min-width: 0;
   }
   .product-card {
     background: var(--surface);
@@ -423,6 +428,7 @@
     position: relative;
     color: inherit;
     text-decoration: none;
+    min-width: 0;
   }
   a.product-card { cursor: pointer; display: flex; }
   .product-card:hover {
@@ -1091,6 +1097,37 @@
     justify-content: space-between;
     gap: 16px;
     flex-wrap: wrap;
+  }
+
+  /* ── MOBILE SAFETY ────────────────────────────────── */
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 40px; }
+    .wrap,
+    #blocks,
+    .section,
+    .narrative,
+    .chart-row,
+    .chart-cell,
+    .chart,
+    .product-grid,
+    .product-card { min-width: 0; max-width: 100%; }
+    .header .meta { flex-wrap: wrap; gap: 8px 14px; }
+    .section,
+    .narrative { padding: 18px 16px; }
+    .section-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .section-head .lede { max-width: none; text-align: left; }
+    .kpi-row,
+    .card-grid,
+    .product-grid,
+    .insight-stack,
+    .roadmap,
+    .source-notes,
+    .quote-wall,
+    .chart-row,
+    .chart-row.two-col,
+    .chart-row.three-col { grid-template-columns: minmax(0, 1fr); }
+    .table-wrap,
+    .multisource-wrap { max-width: 100%; overflow-x: auto; }
   }
 </style>
 </head>
@@ -1989,12 +2026,21 @@
 
   // ── ECHARTS HELPERS ───────────────────────────────
   const charts = [];
+  const chartResizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(entries => {
+        entries.forEach(entry => {
+          const chart = echarts.getInstanceByDom(entry.target);
+          if (chart && entry.contentRect.width > 0) chart.resize();
+        });
+      })
+    : null;
   const initChart = (id, opt) => {
     const el = document.getElementById(id);
     if (!el) return;
     const c = echarts.init(el, null, { renderer: 'svg' });
     c.setOption(opt);
     charts.push(c);
+    chartResizeObserver?.observe(el);
   };
   const PALETTE = ['#2563eb', '#7c3aed', '#16a34a', '#ea580c', '#dc2626', '#0891b2', '#db2777'];
   const baseAxis = () => ({
