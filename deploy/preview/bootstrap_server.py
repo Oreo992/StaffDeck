@@ -16,6 +16,7 @@ ENV_FILE = STATE_DIR / "backend.env"
 CONTAINER_UID = 10001
 CONTAINER_GID = 10001
 DEFAULT_MODEL_NAME = "claude-opus-4-8"
+PREVIEW_APP_NAME = "Agent Team Preview"
 
 
 def container_environment(container: str) -> dict[str, str]:
@@ -64,6 +65,7 @@ def main() -> None:
     os.chown(APP_DATA_DIR, CONTAINER_UID, CONTAINER_GID)
 
     if ENV_FILE.exists():
+        upsert_environment_setting(ENV_FILE, "APP_NAME", PREVIEW_APP_NAME)
         upsert_environment_setting(ENV_FILE, "DEMO_MODEL_NAME", DEFAULT_MODEL_NAME)
         print(f"Updated private environment defaults: {ENV_FILE}")
         return
@@ -73,7 +75,7 @@ def main() -> None:
         raise RuntimeError("LITELLM_MASTER_KEY is missing from litellm-proxy")
 
     values = {
-        "APP_NAME": "StaffDeck Preview",
+        "APP_NAME": PREVIEW_APP_NAME,
         "APP_SECRET": secrets.token_urlsafe(64),
         "DEMO_MODEL_BASE_URL": "http://host.docker.internal:4000/v1",
         "DEMO_MODEL_NAME": DEFAULT_MODEL_NAME,

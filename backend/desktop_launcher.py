@@ -12,7 +12,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-APP_NAME = "StaffDeck"
+APP_NAME = "Agent Team"
 APP_ID = "ai.staffdeck.desktop"
 APP_VERSION = "0.1.0"
 DEFAULT_PORT_RANGE_START = 5173

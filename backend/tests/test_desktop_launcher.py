@@ -79,7 +79,7 @@ def test_health_requires_staffdeck_marker(monkeypatch) -> None:
     def fake_urlopen(url, timeout):
         assert url == "http://127.0.0.1:5173/api/health"
         assert timeout == 1
-        return FakeResponse(b'{"status":"ok","app":"StaffDeck"}')
+        return FakeResponse(b'{"status":"ok","app":"Agent Team"}')
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     assert desktop_launcher._health_ok("http://127.0.0.1:5173") is True

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Switch the live StaffDeck preview to the RC-backed Claude route."""
+"""Switch the live Agent Team preview to the RC-backed Claude route."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def main() -> None:
         token=token,
     )
     if updated.get("model") != TARGET_MODEL:
-        raise RuntimeError("StaffDeck did not persist the RC-backed model")
+        raise RuntimeError("Agent Team did not persist the RC-backed model")
 
     test_result = request_json(
         "POST",
@@ -84,7 +84,7 @@ def main() -> None:
     )
     if not test_result.get("success"):
         raise RuntimeError("RC-backed model connectivity test failed")
-    print(f"Configured RC-backed StaffDeck model PASS model={TARGET_MODEL}")
+    print(f"Configured RC-backed Agent Team model PASS model={TARGET_MODEL}")
 
 
 if __name__ == "__main__":

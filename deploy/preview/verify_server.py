@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the public NeoSpark StaffDeck preview without printing credentials."""
+"""Verify the public NeoSpark Agent Team preview without printing credentials."""
 
 from __future__ import annotations
 
@@ -51,12 +51,12 @@ def main() -> None:
     admin = next(item for item in credentials["accounts"] if item["username"] == "admin")
 
     health = request_json("GET", "/api/health")
-    if health != {"status": "ok", "app": "StaffDeck"}:
+    if health != {"status": "ok", "app": "Agent Team"}:
         raise RuntimeError("Unexpected health response")
 
     status, content_type, html = request("GET", "/workspace/gallery")
-    if status != 200 or content_type != "text/html" or b"StaffDeck" not in html:
-        raise RuntimeError("Workspace gallery did not return the StaffDeck SPA")
+    if status != 200 or content_type != "text/html" or b"Agent Team" not in html:
+        raise RuntimeError("Workspace gallery did not return the Agent Team SPA")
 
     login = request_json(
         "POST",
@@ -91,7 +91,7 @@ def main() -> None:
         raise RuntimeError("Default model connectivity test failed")
 
     print(
-        "StaffDeck preview verification PASS "
+        "Agent Team preview verification PASS "
         f"model={default_model['model']} provider={default_model['provider']}"
     )
 

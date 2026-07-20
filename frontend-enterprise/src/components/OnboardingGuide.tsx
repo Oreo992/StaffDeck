@@ -10,6 +10,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import galleryImage from "@/assets/onboarding-gallery.png";
 import profileImage from "@/assets/onboarding-profile.png";
+import BrandLogo from "@/components/BrandLogo";
 
 const ONBOARDING_SEEN_KEY = "staffdeck_onboarding_guide_seen";
 
@@ -37,7 +38,7 @@ const CARD_BADGE_CLASS =
 const STEPS: GuideStep[] = [
   {
     image: galleryImage,
-    eyebrow: "欢迎使用 StaffDeck",
+    eyebrow: "欢迎使用 Agent Team",
     titleLines: ["数字员工", "全流程构建与管理平台"],
     description:
       "像招聘、培养、管理真人员工一样，构建你的数字员工团队。把重复的事情交给数字员工，让自己专注更重要的工作。",
@@ -141,13 +142,16 @@ export default function OnboardingGuide() {
           {current.titleLines.join("")}
         </DialogTitle>
 
-        <div className="hidden h-[560px] bg-[#e9eef6] md:block">
+        <div className="relative hidden h-[560px] bg-[#e9eef6] md:block">
           <img
             key={current.image}
             src={current.image}
             alt=""
             className="size-full object-cover object-top-left"
           />
+          <div className="absolute left-[18px] top-[16px] flex h-[38px] w-[124px] items-center bg-[#fbfcfe] px-[4px]">
+            <BrandLogo className="origin-left scale-[0.72]" markSize={28} />
+          </div>
         </div>
 
         <div className="relative flex h-[560px] flex-col justify-between bg-linear-to-b from-[#f9fcff] to-[#e3f1ff] px-[36px] pt-[10px] pb-[32px]">

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy Agent Team MCP credentials into StaffDeck's private environment by reference.
+"""Copy Agent Team MCP credentials into the preview's private environment by reference.
 
 The values are never printed and the destination remains mode 0600. This script is
 intended to run on the NeoSpark host before recreating the preview container.
@@ -61,7 +61,7 @@ def main() -> None:
         "TOOL_TIMEOUT_SECONDS": "120",
     }
     _upsert_many(args.env_file, values)
-    print("Configured Agent Team MCP secret references in the private StaffDeck environment")
+    print("Configured Agent Team MCP secret references in the private preview environment")
 
 
 if __name__ == "__main__":

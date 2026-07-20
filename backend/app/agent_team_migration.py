@@ -561,22 +561,22 @@ def _resolve_skill_dir(source_root: Path, source_card: SourceCard, skill_name: s
 def _safe_text(text: str, sensitive_values: set[str] | None = None) -> str:
     for value in sorted(sensitive_values or set(), key=len, reverse=True):
         if value:
-            text = text.replace(value, "__REDACTED_USE_STAFFDECK_SECRET__")
-    text = SECRET_JSON_PATTERN.sub(r'\1"__REDACTED_USE_STAFFDECK_SECRET__"', text)
+            text = text.replace(value, "__REDACTED_USE_AGENT_TEAM_SECRET__")
+    text = SECRET_JSON_PATTERN.sub(r'\1"__REDACTED_USE_AGENT_TEAM_SECRET__"', text)
     text = SECRET_ENV_DEFAULT_PATTERN.sub(r'\1""\2', text)
     text = SECRET_ASSIGNMENT_PATTERN.sub(r'\1""', text)
     text = LEGACY_PATH_PATTERN.sub("$SKILL_WORKSPACE", text)
-    text = text.replace("mcp__studio__studio_report", "StaffDeck 当前会话输出")
+    text = text.replace("mcp__studio__studio_report", "Agent Team 当前会话输出")
     text = text.replace("$TASK_DIR", "当前会话工作目录")
     return text
 
 
 def _sanitize_persona(text: str, source_id: str, sensitive_values: set[str] | None = None) -> str:
     compatibility = (
-        "# StaffDeck 兼容层\n\n"
+        "# Agent Team 兼容层\n\n"
         f"你是从 Agent Team 迁移来的独立数字员工 `{source_id}`。"
-        "仅使用 StaffDeck 当前绑定并显示可用的 SOP、通用技能、知识库和工具。"
-        "StaffDeck 当前不支持跨员工自动派单；不得声称已调用、等待或收到其他员工结果。"
+        "仅使用 Agent Team 当前绑定并显示可用的 SOP、通用技能、知识库和工具。"
+        "Agent Team 当前不支持跨员工自动派单；不得声称已调用、等待或收到其他员工结果。"
         "需要其他角色协作时，输出清晰的交接 Brief，由用户选择下一位员工。"
         "外部数据必须来自本轮真实工具结果；写操作或对外发送必须先取得用户确认。\n\n"
     )
@@ -745,8 +745,8 @@ def compile_manifest(source_root: Path, team_name: str = "demo-ecom") -> dict[st
         "sops": sops,
         "mcp_servers": MCP_SERVERS,
         "warnings": [
-            "StaffDeck 当前不支持跨员工自动派单；橙橙 SOP 仅输出编排方案。",
-            "脚本型外部技能以 draft 导入，待转为 StaffDeck Tool 后再发布。",
+            "Agent Team 当前不支持跨员工自动派单；橙橙 SOP 仅输出编排方案。",
+            "脚本型外部技能以 draft 导入，待转为 Agent Team Tool 后再发布。",
             "图片、视频、飞书和平台写操作尚未在首批启用。",
         ],
     }
@@ -1024,7 +1024,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Migrate Agent Team capability config to StaffDeck"
+        description="Migrate Agent Team capability config to the Agent Team console"
     )
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--team", default="demo-ecom")

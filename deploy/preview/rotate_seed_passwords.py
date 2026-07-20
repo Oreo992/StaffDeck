@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rotate StaffDeck's seeded credentials and store replacements server-side."""
+"""Rotate Agent Team's seeded credentials and store replacements server-side."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-# StaffDeck preview deployment
+# Agent Team preview deployment
 
 This deployment publishes the `preview` branch at
 `https://preview.agentteam.neospark.cn` without sharing application state with other
@@ -56,5 +56,5 @@ docker run --rm --network host --user 0:0 \
 ```
 
 Run without `--apply` first to get deterministic inventory counts and the manifest hash.
-External script-backed capabilities remain draft until a StaffDeck-native tool adapter exists;
+External script-backed capabilities remain draft until an Agent Team-native tool adapter exists;
 the importer never copies source credentials into skill packages.
