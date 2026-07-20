@@ -76,6 +76,50 @@ def test_router_decision_only_hydrates_structured_profile_memory() -> None:
     assert decision.awaiting_input.expected_fields == ["product_id"]
 
 
+def test_router_drops_awaiting_fields_removed_from_updated_skill() -> None:
+    loop = object.__new__(AgentLoop)
+    session = ChatSession(
+        id="session_test",
+        tenant_id="tenant_demo",
+        active_skill_id="agent_team_ads_diagnosis",
+        slots_json={"asin": "B0TEST"},
+        awaiting_input_json={
+            "skill_id": "agent_team_ads_diagnosis",
+            "step_id": "collect_metrics",
+            "expected_fields": ["date_range", "ad_metrics"],
+        },
+    )
+    decision = RouterDecision(
+        decision="continue_active",
+        awaiting_input=AwaitingInput(
+            skill_id="agent_team_ads_diagnosis",
+            step_id="collect_metrics",
+            expected_fields=["date_range", "ad_metrics"],
+        ),
+    )
+    skill = Skill(
+        tenant_id="tenant_demo",
+        skill_id="agent_team_ads_diagnosis",
+        name="广告诊断",
+        status="published",
+        content_json={
+            "required_info": ["asin"],
+            "nodes": [
+                {
+                    "node_id": "collect_metrics",
+                    "expected_user_info": ["asin"],
+                }
+            ],
+        },
+    )
+
+    hydrated = loop._hydrate_router_decision_from_context(session, decision, [skill], [])
+
+    assert decision.awaiting_input is None
+    assert session.awaiting_input_json is None
+    assert hydrated["awaiting_input_expected_fields"] == []
+
+
 class FakeMessageDb(FakeDb):
     def __init__(self, rows: list[Message]) -> None:
         super().__init__()

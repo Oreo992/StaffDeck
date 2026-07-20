@@ -171,6 +171,46 @@ def test_html_delivery_request_does_not_reuse_ask_user_reply(monkeypatch):
     assert "请补充广告数据" not in reply
 
 
+def test_migrated_first_draft_request_does_not_reuse_optional_question(monkeypatch):
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        assert payload["progress"]["missing_required_info"] == []
+        assert "先交付可用首版" in payload["response_rules"][-2]
+        return "先给你可用首版，未提供的信息已经按默认假设标注。"
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_text", fake_generate_text)
+
+    reply = ResponseGenerator().generate(
+        message="不要再问了，按现有信息直接做",
+        session=ChatSession(id="session_test", tenant_id="tenant_demo"),
+        skill=Skill(
+            tenant_id="tenant_demo",
+            skill_id="agent_team_visual_brief",
+            name="视觉 Brief",
+            status="published",
+            content_json={
+                "required_info": [],
+                "response_rules": [
+                    "区分事实和假设。",
+                    "任务明确时默认先交付可用首版。",
+                    "用户要求直接做时不得重复追问。",
+                ],
+                "nodes": [],
+            },
+        ),
+        router_decision=RouterDecision(decision="continue_active"),
+        step_result=StepAgentResult(action="ask_user", reply="请补充参考风格"),
+        tool_result=None,
+        model_config=None,  # type: ignore[arg-type]
+    )
+
+    assert reply.startswith("先给你可用首版")
+    assert "请补充参考风格" not in reply
+
+
 def test_tool_result_reply_is_model_driven(monkeypatch):
     def fake_init(self, model_config):  # noqa: ANN001
         return None

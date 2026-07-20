@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.0.1"
+MIGRATION_VERSION = "1.0.2"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -191,6 +191,7 @@ def _linear_sop(
     *,
     triggers: list[str],
     goals: list[str],
+    optional_defaults: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "skill_id": f"agent_team_{source_id.replace('-', '_')}",
@@ -209,11 +210,17 @@ def _linear_sop(
             "multi_slot_per_turn": True,
             "extract_scope": "all_skill_expected_user_info",
             "skip_satisfied_steps": True,
+            "ask_only_for_required_info": True,
+            "optional_info_policy": "assume_and_disclose",
+            "direct_delivery_policy": "do_not_ask_optional_questions",
+            "optional_defaults": optional_defaults or {},
         },
         "response_rules": [
             "区分已确认事实、推断和数据缺口。",
             "外部数据必须来自工具结果，不得根据记忆编造。",
             "写操作和对外发送必须再次取得用户确认。",
+            "任务对象和目标明确时，默认先交付可用首版；非 required_info 缺失时采用约定默认值或合理假设并显式标注。",
+            "用户明确说直接做、先出一版或不要补充提问时，除真正阻塞字段和不可逆操作确认外不得重复追问。",
         ],
         "nodes": nodes,
         "edges": [
@@ -238,8 +245,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_goal",
                 "收集目标",
-                "确认目标、背景、期望交付物、截止时间和已有材料。",
-                expected=["goal", "deliverable"],
+                "确认任务目标；交付物默认采用可执行方案，背景、截止时间和已有材料均为非关键信息，缺失时使用当前上下文和通用质量门直接出首版，不得追问。",
+                expected=["goal"],
             ),
             _node(
                 "classify_owner",
@@ -262,6 +269,11 @@ SOP_TEMPLATES = {
         ],
         triggers=["这个任务该派给谁", "帮我拆解跨境电商任务", "运营和广告结论冲突怎么办"],
         goals=["明确主责员工", "明确交接物与执行顺序", "建立最终质量门"],
+        optional_defaults={
+            "deliverable": "可执行的员工分工与任务方案",
+            "deadline": "未指定，不作为首版交付阻塞项",
+            "materials": "使用当前会话已有材料",
+        },
     ),
     "cc-amz": _linear_sop(
         "amazon-research",
@@ -271,8 +283,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_scope",
                 "确认研究范围",
-                "确认站点、产品/ASIN/关键词、任务深度 L1-L3 和决策问题。",
-                expected=["marketplace", "product_or_asin", "research_depth"],
+                "确认产品、ASIN 或关键词；站点默认美国站，研究深度默认 L2，决策问题默认判断是否值得做。后三项均为非关键信息，缺失时采用默认值并标注，不得追问。",
+                expected=["product_or_asin"],
             ),
             _node(
                 "fetch_primary",
@@ -313,6 +325,11 @@ SOP_TEMPLATES = {
         ],
         triggers=["这个 ASIN 怎么样", "做一份竞品分析", "这个品类值不值得做"],
         goals=["获得可追溯市场证据", "形成选品或竞品判断", "输出标准 EvidencePack"],
+        optional_defaults={
+            "marketplace": "Amazon 美国站",
+            "research_depth": "L2 标准研究",
+            "decision_question": "是否值得做以及主要风险",
+        },
     ),
     "cc-copy": _linear_sop(
         "conversion-copy",
@@ -322,8 +339,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_brief",
                 "收集文案 Brief",
-                "确认平台、产品、目标人群、转化目标、语气、证据材料和禁用表达。",
-                expected=["platform", "product", "audience", "conversion_goal"],
+                "确认产品；平台默认 Amazon，目标人群默认该品类核心购买者，转化目标默认提升点击与购买，语气默认清晰可信。以上除产品外均为非关键信息，缺失时采用默认值并标注，不得追问。",
+                expected=["product"],
             ),
             _node(
                 "evidence_gate",
@@ -346,6 +363,12 @@ SOP_TEMPLATES = {
         ],
         triggers=["写 Amazon Listing", "优化商品文案", "把用户洞察转成卖点"],
         goals=["形成可直接使用的转化文案", "保留证据依据", "通过平台与合规检查"],
+        optional_defaults={
+            "platform": "Amazon",
+            "audience": "该品类核心购买者",
+            "conversion_goal": "提升点击与购买转化",
+            "tone": "清晰、可信、不过度承诺",
+        },
     ),
     "cc-ads": _linear_sop(
         "ads-diagnosis",
@@ -355,8 +378,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_metrics",
                 "收集广告数据",
-                "确认站点和 ASIN；时间窗默认近 30 天，预算、广告指标和目标缺失时按现有市场数据先输出估算版并标注假设，不得阻塞交付。",
-                expected=["marketplace", "asin"],
+                "确认 ASIN；站点默认美国站，时间窗默认近 30 天，预算、广告指标和目标均为非关键信息，缺失时按现有市场数据先输出估算版并标注假设，不得追问。",
+                expected=["asin"],
             ),
             _node(
                 "fetch_context",
@@ -390,6 +413,12 @@ SOP_TEMPLATES = {
         ],
         triggers=["广告 ACoS 太高怎么办", "分析 Amazon 广告", "给我关键词投放建议"],
         goals=["定位广告漏斗问题", "形成有阈值的操作建议", "定义复盘窗口"],
+        optional_defaults={
+            "marketplace": "Amazon 美国站",
+            "date_range": "近 30 天",
+            "ad_metrics": "缺失时使用市场信号形成估算版",
+            "target": "优先改善有效流量与可控 ACoS",
+        },
     ),
     "cc-cs": _linear_sop(
         "customer-voc",
@@ -399,8 +428,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_feedback",
                 "收集反馈",
-                "确认平台、产品、时间范围、原始评论/咨询/工单和分析目标。",
-                expected=["platform", "product", "feedback_samples"],
+                "优先使用用户已贴出的评论、咨询或工单；平台、产品、时间范围和分析目标均为非关键信息。没有样本时先交付 VOC 分析框架、风险假设和建议的数据清单，不得追问。",
+                expected=[],
             ),
             _node(
                 "fetch_reviews",
@@ -427,6 +456,12 @@ SOP_TEMPLATES = {
         ],
         triggers=["分析客户差评", "整理客服问题", "做一份 VOC 报告"],
         goals=["识别高频与高风险问题", "形成跨角色回流建议", "沉淀客服口径"],
+        optional_defaults={
+            "platform": "当前会话所指平台，无法判断时按 Amazon",
+            "date_range": "近 90 天",
+            "analysis_goal": "识别高频问题、严重风险和跨角色改进项",
+            "feedback_samples": "缺失时交付分析框架并标注待验证",
+        },
     ),
     "cc-art": _linear_sop(
         "visual-brief",
@@ -436,8 +471,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_assets",
                 "收集视觉输入",
-                "确认平台、尺寸、产品图、品牌规范、文案卖点、参考风格和禁用元素。",
-                expected=["platform", "asset_type", "product_assets", "copy_brief"],
+                "优先使用当前会话中的产品、素材和目标；平台默认 Amazon，类型未说明时默认主图与 A+ 核心模块。尺寸、产品图、品牌规范、文案和参考风格均为非关键信息，缺失时用占位说明和素材待办交付 VisualBrief，不得追问，也不得假装已出图。",
+                expected=[],
             ),
             _node(
                 "inspect_product",
@@ -470,6 +505,12 @@ SOP_TEMPLATES = {
         ],
         triggers=["做 Amazon 主图方案", "设计 A+ 页面", "给我电商视频分镜"],
         goals=["形成可执行视觉 Brief", "保证产品与品牌一致性", "通过平台质量门"],
+        optional_defaults={
+            "platform": "Amazon",
+            "asset_type": "主图与 A+ 核心模块",
+            "product_assets": "缺失时使用明确占位和素材待办",
+            "copy_brief": "根据已知卖点形成待确认文案层级",
+        },
     ),
     "researcher": _linear_sop(
         "fact-research",
@@ -479,8 +520,8 @@ SOP_TEMPLATES = {
             _node(
                 "collect_question",
                 "明确研究问题",
-                "确认研究问题、范围、地区、时间口径、可接受来源和截止时间。",
-                expected=["research_question", "scope"],
+                "确认研究问题；范围默认覆盖与问题直接相关的市场，地区默认当前业务语境，时间口径默认最新可获得数据。以上除研究问题外均为非关键信息，缺失时采用默认值并标注，不得追问。",
+                expected=["research_question"],
             ),
             _node(
                 "research",
@@ -507,6 +548,12 @@ SOP_TEMPLATES = {
         ],
         triggers=["帮我调研这个市场", "核查这个说法", "做一份研究简报"],
         goals=["形成可追溯研究结论", "显式标记不确定性", "提供下一步核查路径"],
+        optional_defaults={
+            "scope": "与问题直接相关的市场和关键变量",
+            "region": "当前业务语境，无法判断时使用全球/美国市场",
+            "time_basis": "最新可获得数据",
+            "sources": "当前绑定工具与用户材料",
+        },
     ),
 }
 
@@ -582,6 +629,9 @@ def _sanitize_persona(text: str, source_id: str, sensitive_values: set[str] | No
         "Agent Team 当前不支持跨员工自动派单；不得声称已调用、等待或收到其他员工结果。"
         "需要其他角色协作时，输出清晰的交接 Brief，由用户选择下一位员工。"
         "外部数据必须来自本轮真实工具结果；写操作或对外发送必须先取得用户确认。"
+        "任务对象和目标已经明确、能够形成有用结果时，默认先交付可用首版。"
+        "只有缺少任务对象或目标会导致无法形成任何有效内容，或涉及付款、发布、删除、发送等不可逆操作确认时，才允许追问。"
+        "其他非关键缺口必须使用合理默认值或假设并明确标注；用户说直接做、先出一版或不要补充提问时不得重复追问。"
         "当用户明确要求 HTML 成品时，必须用现有信息直接形成完整报告；非关键数据缺失时采用并标注默认值或估算，不得反复追问。"
         "HTML 由平台发布并追加真实公网链接；看到链接前不得声称已发送、已上传或已生成文件。\n\n"
     )

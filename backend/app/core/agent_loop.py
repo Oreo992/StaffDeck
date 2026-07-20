@@ -290,10 +290,17 @@ class AgentLoop:
             router_decision.slot_hints = {**dict(router_decision.slot_hints or {}), **patch}
             hydrated["primary"] = patch
         remaining_awaiting = self._trim_satisfied_awaiting_fields(
-            router_decision, {**base_slots, **patch}
+            router_decision,
+            {**base_slots, **patch},
+            allowed_fields=_skill_expected_fields(target_skill) if target_skill else None,
         )
         if remaining_awaiting is not None:
             hydrated["awaiting_input_expected_fields"] = remaining_awaiting
+            chat_session.awaiting_input_json = (
+                router_decision.awaiting_input.model_dump(mode="json")
+                if router_decision.awaiting_input
+                else None
+            )
 
         task_patches: list[dict[str, Any]] = []
         for task in [
@@ -334,7 +341,10 @@ class AgentLoop:
         return patch
 
     def _trim_satisfied_awaiting_fields(
-        self, router_decision: RouterDecision, slots: dict[str, Any]
+        self,
+        router_decision: RouterDecision,
+        slots: dict[str, Any],
+        allowed_fields: set[str] | None = None,
     ) -> list[str] | None:
         if not router_decision.awaiting_input:
             return None
@@ -342,7 +352,8 @@ class AgentLoop:
         remaining = [
             field
             for field in router_decision.awaiting_input.expected_fields
-            if not _slot_has_value(slots, field)
+            if (allowed_fields is None or field in allowed_fields)
+            and not _slot_has_value(slots, field)
         ]
         if remaining == original:
             return None

@@ -24,6 +24,16 @@ PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "response_gener
 FALLBACK_REPLY = "抱歉，我暂时无法处理这个问题。您可以换个说法，或者我可以帮您转人工。"
 MODEL_FAILURE_SUGGESTION = "请检查模型配置、API Key、网络或模型服务状态后重试。"
 TOOL_FAILURE_SUGGESTION = "请检查工具配置、调用参数或外部服务状态后重试。"
+DIRECT_DELIVERY_PATTERN = re.compile(
+    r"直接做|直接给|直接出|先出一版|先做一版|按现有|按当前|不要再问|别再问|不要提问|不用补充"
+)
+
+
+def first_draft_delivery_requested(message: str, skill: Skill | None) -> bool:
+    if not skill or not DIRECT_DELIVERY_PATTERN.search(str(message or "")):
+        return False
+    rules = (skill.content_json or {}).get("response_rules", [])
+    return any("先交付可用首版" in str(rule) for rule in rules)
 
 
 def public_error_detail(value: object, fallback: str = "未知原因") -> str:
@@ -80,8 +90,10 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> str:
-        if not is_html_delivery_request(message) and self._can_use_step_reply_directly(
-            step_result, tool_result, task_results
+        if (
+            not is_html_delivery_request(message)
+            and not first_draft_delivery_requested(message, skill)
+            and self._can_use_step_reply_directly(step_result, tool_result, task_results)
         ):
             return step_result.reply.strip()
         raw_payload = self._payload(
@@ -124,8 +136,10 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> Iterator[str]:
-        if not is_html_delivery_request(message) and self._can_use_step_reply_directly(
-            step_result, tool_result, task_results
+        if (
+            not is_html_delivery_request(message)
+            and not first_draft_delivery_requested(message, skill)
+            and self._can_use_step_reply_directly(step_result, tool_result, task_results)
         ):
             yield from self.chunk_text(step_result.reply or "")
             return
@@ -222,6 +236,11 @@ class ResponseGenerator:
             if is_html_delivery_request(message)
             else None
         )
+        direct_delivery_request = (
+            {"must_deliver_now": True, "optional_questions_allowed": False}
+            if first_draft_delivery_requested(message, skill)
+            else None
+        )
         if projected_task_results:
             payload: dict[str, object] = {
                 "user_message": message,
@@ -232,6 +251,8 @@ class ResponseGenerator:
             }
             if delivery_request:
                 payload["delivery_request"] = delivery_request
+            if direct_delivery_request:
+                payload["direct_delivery_request"] = direct_delivery_request
             return payload
         knowledge_context = self._current_knowledge_context(message, session, step_result)
         compact_knowledge = compact_knowledge_context(knowledge_context)
@@ -257,6 +278,8 @@ class ResponseGenerator:
         }
         if delivery_request:
             payload["delivery_request"] = delivery_request
+        if direct_delivery_request:
+            payload["direct_delivery_request"] = direct_delivery_request
         return payload
 
     def _project_task_results(

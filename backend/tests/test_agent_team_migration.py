@@ -55,13 +55,34 @@ def test_all_curated_sops_are_valid_staffdeck_graphs() -> None:
         assert card.terminal_node_ids == [card.nodes[-1].node_id]
 
 
-def test_ads_sop_only_blocks_on_identity_fields() -> None:
-    content = SOP_TEMPLATES["cc-ads"]
-    collect = next(node for node in content["nodes"] if node["node_id"] == "collect_metrics")
+def test_all_migrated_sops_only_block_on_minimum_identity_fields() -> None:
+    expected_by_agent = {
+        "orange-pm": ["goal"],
+        "cc-amz": ["product_or_asin"],
+        "cc-copy": ["product"],
+        "cc-ads": ["asin"],
+        "cc-cs": [],
+        "cc-art": [],
+        "researcher": ["research_question"],
+    }
 
-    assert collect["expected_user_info"] == ["marketplace", "asin"]
-    assert content["required_info"] == ["asin", "marketplace"]
-    assert "默认" in collect["instruction"]
+    for source_id, expected_fields in expected_by_agent.items():
+        content = SOP_TEMPLATES[source_id]
+        collect = content["nodes"][0]
+        assert collect["expected_user_info"] == expected_fields
+        assert content["required_info"] == sorted(expected_fields)
+        assert "非关键" in collect["instruction"]
+        assert "不得追问" in collect["instruction"]
+
+
+def test_all_migrated_sops_default_to_first_draft_delivery() -> None:
+    for content in SOP_TEMPLATES.values():
+        policy = content["slot_filling_policy"]
+        assert policy["ask_only_for_required_info"] is True
+        assert policy["optional_info_policy"] == "assume_and_disclose"
+        assert policy["direct_delivery_policy"] == "do_not_ask_optional_questions"
+        assert any("先交付可用首版" in rule for rule in content["response_rules"])
+        assert any("不得重复追问" in rule for rule in content["response_rules"])
 
 
 def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() -> None:
@@ -71,6 +92,8 @@ def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() ->
     assert "公网链接" in result
     assert "不得声称" in result
     assert "非关键" in result
+    assert "先交付可用首版" in result
+    assert "不可逆" in result
 
 
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
