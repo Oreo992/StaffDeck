@@ -29,6 +29,7 @@ RUN groupadd --gid 10001 staffdeck \
 WORKDIR /app
 COPY backend ./backend
 RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip \
     python -m pip install --index-url "${PIP_INDEX_URL}" ./backend
 
 COPY --from=frontend-build /src/frontend-enterprise/dist ./frontend-enterprise/dist
