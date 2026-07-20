@@ -23,6 +23,7 @@ from app.tools.tool_schema import ToolResult
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "response_generator_prompt.md"
 FALLBACK_REPLY = "抱歉，我暂时无法处理这个问题。您可以换个说法，或者我可以帮您转人工。"
 MODEL_FAILURE_SUGGESTION = "请检查模型配置、API Key、网络或模型服务状态后重试。"
+MODEL_FORMAT_FAILURE_SUGGESTION = "模型已返回内容，但格式不符合当前步骤要求，请重试或切换模型。"
 TOOL_FAILURE_SUGGESTION = "请检查工具配置、调用参数或外部服务状态后重试。"
 DIRECT_DELIVERY_PATTERN = re.compile(
     r"直接做|直接给|直接出|先出一版|先做一版|按现有|按当前|不要再问|别再问|不要提问|不用补充"
@@ -60,6 +61,8 @@ def format_runtime_failure_reply(
 
 
 def model_failure_suggestion(detail: object) -> str:
+    if "did not return valid json" in str(detail or "").lower():
+        return MODEL_FORMAT_FAILURE_SUGGESTION
     return MODEL_FAILURE_SUGGESTION
 
 

@@ -372,7 +372,7 @@ class LLMClient:
                     ),
                 }
         previews = "; ".join(
-            f"attempt_{index + 1}_preview={_preview(output)!r}"
+            _json_output_diagnostic(output, index + 1)
             for index, output in enumerate(outputs)
         )
         raise LLMError(
@@ -935,6 +935,9 @@ def _loads_llm_json(text: str) -> Any:
             return json.loads(variant)
         except json.JSONDecodeError as exc:
             last_error = exc
+    recovered_html_reply = _loads_json_with_repaired_html_reply(candidate)
+    if recovered_html_reply is not None:
+        return recovered_html_reply
     try:
         literal = ast.literal_eval(candidate)
     except (SyntaxError, ValueError):
@@ -944,6 +947,60 @@ def _loads_llm_json(text: str) -> Any:
     if last_error is not None:
         raise last_error
     raise json.JSONDecodeError("Could not decode JSON", candidate, 0)
+
+
+_STEP_AGENT_FIELDS = (
+    "action",
+    "slot_updates",
+    "tool_call",
+    "knowledge_query",
+    "next_step_id",
+    "is_step_completed",
+    "handoff",
+)
+_HTML_REPLY_START = re.compile(r'"reply"\s*:\s*"', re.I)
+_HTML_REPLY_NEXT_FIELD = re.compile(
+    r'"\s*,\s*"(?:' + "|".join(_STEP_AGENT_FIELDS) + r')"\s*:',
+    re.I,
+)
+
+
+def _loads_json_with_repaired_html_reply(text: str) -> dict[str, Any] | None:
+    """Recover a Step Agent reply when raw HTML was not JSON-escaped by the model."""
+    match = _HTML_REPLY_START.search(text)
+    if not match:
+        return None
+    value_start = match.end()
+    preview = text[value_start : value_start + 160].lstrip("` \n\r\t").lower()
+    if not preview.startswith(("<!doctype html", "<html")):
+        return None
+
+    boundaries = [
+        value_start + field_match.start()
+        for field_match in _HTML_REPLY_NEXT_FIELD.finditer(text[value_start:])
+    ]
+    outer_close = len(text.rstrip()) - 1
+    if outer_close >= value_start and text[outer_close] == "}":
+        quote_index = outer_close - 1
+        while quote_index >= value_start and text[quote_index].isspace():
+            quote_index -= 1
+        if quote_index >= value_start and text[quote_index] == '"':
+            boundaries.append(quote_index)
+
+    for boundary in reversed(boundaries):
+        raw_reply = text[value_start:boundary]
+        repaired = (
+            text[: match.end() - 1]
+            + json.dumps(raw_reply, ensure_ascii=False)
+            + text[boundary + 1 :]
+        )
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("reply"), str):
+            return parsed
+    return None
 
 
 def _json_candidate_variants(text: str) -> tuple[str, ...]:
@@ -1013,6 +1070,21 @@ def _preview(text: str, limit: int = 1200) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...<truncated>"
+
+
+def _json_output_diagnostic(text: str, attempt: int) -> str:
+    normalized = str(text or "")
+    stripped = normalized.lstrip().lower()
+    has_html = (
+        "<!doctype html" in stripped[:240]
+        or '"reply":"<!doctype html' in stripped[:320]
+    )
+    content_kind = "html" if has_html else "text"
+    fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    return (
+        f"attempt_{attempt}: chars={len(normalized)}, kind={content_kind}, "
+        f"sha256={fingerprint}"
+    )
 
 
 def _response_format_unsupported(message: str) -> bool:

@@ -984,6 +984,56 @@ def test_generate_json_repairs_unescaped_string_quotes_without_retry(monkeypatch
     assert "_json_repair" not in payloads[0]
 
 
+def test_generate_json_recovers_html_reply_with_embedded_json_without_retry(monkeypatch):
+    client = object.__new__(LLMClient)
+    payloads = []
+    html = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><style>'
+        '.card::after{content:"价格对比"}'
+        '</style></head><body><script>'
+        'const report = {"price":66.46,"rating":4.4};'
+        '</script><div class="card">完成</div></body></html>'
+    )
+
+    def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+        payloads.append(payload)
+        return (
+            '{"action":"reply","slot_updates":{},"reply":"'
+            + html
+            + '","is_step_completed":true}'
+        )
+
+    monkeypatch.setattr(client, "generate_text", fake_generate_text)
+
+    result = client.generate_json("prompt", {"query": "生成 HTML 报告"})
+
+    assert result == {
+        "action": "reply",
+        "slot_updates": {},
+        "reply": html,
+        "is_step_completed": True,
+    }
+    assert len(payloads) == 1
+    assert "_json_repair" not in payloads[0]
+
+
+def test_generate_json_error_redacts_invalid_html_output(monkeypatch):
+    client = object.__new__(LLMClient)
+
+    def fake_generate_text(_system_prompt, _payload, response_format=None):  # noqa: ANN001, ARG001
+        return '{"action":"reply","reply":"<!DOCTYPE html><style>.card{color:red}'
+
+    monkeypatch.setattr(client, "generate_text", fake_generate_text)
+
+    with pytest.raises(LLMError) as error:
+        client.generate_json("prompt", {})
+
+    detail = str(error.value)
+    assert "kind=html" in detail
+    assert "<!DOCTYPE html" not in detail
+    assert ".card" not in detail
+
+
 def test_generate_json_repairs_trailing_commas_and_string_newlines(monkeypatch):
     client = object.__new__(LLMClient)
 

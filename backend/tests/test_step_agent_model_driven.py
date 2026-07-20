@@ -69,6 +69,7 @@ def test_step_agent_uses_model_json_for_slots_and_tool(monkeypatch):
     assert "skill_id" not in captured["payload"]["active_skill"]
     assert "统一执行引擎" in captured["system_prompt"]
     assert "当前 SOP 的最小投影" in captured["payload"]["_agent_stage"]["instructions"]
+    assert "不得生成 HTML/CSS/JavaScript 源码" in captured["payload"]["_agent_stage"]["instructions"]
     assert captured["payload"]["active_skill"]["current_step"]["node_id"] == (
         "collect_issue"
     )

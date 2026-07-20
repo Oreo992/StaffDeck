@@ -285,6 +285,30 @@ def test_model_failure_returns_explicit_reason(monkeypatch):
     assert reply == "模型调用失败（LLM_ERROR）：upstream timeout。请检查模型配置、API Key、网络或模型服务状态后重试。"
 
 
+def test_model_json_format_failure_does_not_blame_api_key(monkeypatch):
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        raise RuntimeError("Model did not return valid JSON after 3 repair attempts")
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_text", fake_generate_text)
+
+    reply = ResponseGenerator().generate(
+        message="生成 HTML",
+        session=ChatSession(id="session_test", tenant_id="tenant_demo"),
+        skill=None,
+        router_decision=RouterDecision(decision="answer_only"),
+        step_result=StepAgentResult(reply="报告正文"),
+        tool_result=None,
+        model_config=None,  # type: ignore[arg-type]
+    )
+
+    assert "模型已返回内容，但格式不符合当前步骤要求" in reply
+    assert "API Key" not in reply
+
+
 def test_pending_reply_without_tool_result_uses_model_reply(monkeypatch):
     def fake_init(self, model_config):  # noqa: ANN001
         return None
