@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy.pool import StaticPool
+from sqlmodel import SQLModel, Session, create_engine
 
 from app.artifacts.html_delivery import (
     HtmlArtifactPublisher,
     dashboard_payload,
+    is_html_delivery_followup,
     is_html_delivery_request,
     render_html_report,
 )
 from app.core.agent_loop import AgentLoop
-from app.db.models import ChatSession
+from app.db.models import AgentEvent, ChatSession, Message
 
 
 @pytest.mark.parametrize(
@@ -32,6 +36,11 @@ def test_html_delivery_intent_is_detected(message: str) -> None:
 
 def test_plain_html_mention_is_not_treated_as_delivery_request() -> None:
     assert not is_html_delivery_request("HTML 和 PDF 有什么区别？")
+
+
+@pytest.mark.parametrize("message", ["生成好了吗", "HTML 报告链接呢", "为什么没有 HTML 链接"])
+def test_html_delivery_followup_is_detected(message: str) -> None:
+    assert is_html_delivery_followup(message)
 
 
 def test_rendered_report_escapes_model_content() -> None:
@@ -335,3 +344,118 @@ def test_agent_loop_appends_a_real_clickable_link_even_if_model_claimed_one() ->
     assert result.endswith(
         "[打开 HTML 报告](https://agent.neospark.cn/files/verified.html)"
     )
+
+
+def test_agent_loop_publishes_contextual_html_followup_with_recovered_tool_results() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(
+        engine,
+        tables=[Message.__table__, AgentEvent.__table__],
+    )
+    now = datetime.now(UTC)
+    request_id = "msg_html_request"
+    session_id = "session_html_followup"
+
+    class FakePublisher:
+        enabled = True
+        public_url_prefix = "https://agent.neospark.cn/files/"
+
+        def publish(  # noqa: ANN001
+            self, title, content, artifact_id, *, message="", tool_results=None
+        ):
+            assert message == "对比两个 ASIN，以 HTML 格式呈现"
+            assert tool_results == [
+                {
+                    "tool_name": "at_sellersprite.asin_detail",
+                    "arguments": {"asin": "B0DNK7RHZS", "marketplace": "US"},
+                    "success": True,
+                    "data": {"code": "OK", "data": {"asin": "B0DNK7RHZS"}},
+                    "error": None,
+                }
+            ]
+            return "https://agent.neospark.cn/files/contextual.html"
+
+    class FakeEvents:
+        def record(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    with Session(engine) as db:
+        db.add(
+            Message(
+                id=request_id,
+                tenant_id="tenant_demo",
+                session_id=session_id,
+                role="user",
+                content="对比两个 ASIN，以 HTML 格式呈现",
+                created_at=now - timedelta(minutes=2),
+            )
+        )
+        db.add(
+            Message(
+                id="msg_followup",
+                tenant_id="tenant_demo",
+                session_id=session_id,
+                role="user",
+                content="生成好了吗",
+                created_at=now,
+            )
+        )
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id=session_id,
+                event_type="tool_call_finished",
+                payload_json={
+                    "user_message_id": request_id,
+                    "tool_name": "at_sellersprite.asin_detail",
+                    "tool_call": {
+                        "name": "at_sellersprite.asin_detail",
+                        "arguments": {"asin": "B0DNK7RHZS", "marketplace": "US"},
+                    },
+                    "success": True,
+                    "data": {"code": "OK", "data": {"asin": "B0DNK7RHZS"}},
+                    "error": None,
+                },
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        db.commit()
+
+        loop = AgentLoop.__new__(AgentLoop)
+        loop.db = db
+        loop.html_artifacts = FakePublisher()
+        loop.events = FakeEvents()
+        result = loop._with_html_artifact(
+            "生成好了吗",
+            ChatSession(id=session_id, tenant_id="tenant_demo", slots_json={}),
+            "报告正文已经整理好。",
+        )
+
+    assert result.endswith(
+        "[打开 HTML 报告](https://agent.neospark.cn/files/contextual.html)"
+    )
+
+
+def test_agent_loop_does_not_publish_ambiguous_followup_without_html_context() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine, tables=[Message.__table__, AgentEvent.__table__])
+
+    with Session(engine) as db:
+        loop = AgentLoop.__new__(AgentLoop)
+        loop.db = db
+        loop.html_artifacts = object()
+        result = loop._with_html_artifact(
+            "生成好了吗",
+            ChatSession(id="session_no_html", tenant_id="tenant_demo"),
+            "还在处理。",
+        )
+
+    assert result == "还在处理。"

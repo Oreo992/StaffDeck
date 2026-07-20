@@ -19,6 +19,12 @@ _HTML_FORMAT = re.compile(r"(?i)html|网页(?:版|链接|报告|看板)?|网页�
 _DELIVERY_ACTION = re.compile(
     r"整理|生成|导出|输出|呈现|转换|转成|做成|给我|发我|直接发|下载|链接|没有看到|没看到|看不到|打开"
 )
+_DELIVERY_FOLLOWUP = re.compile(
+    r"(?:生成|做好|完成|整理)好(?:了)?吗|"
+    r"(?:报告|文件|网页|HTML).{0,8}(?:好了吗|完成了吗|链接呢|在哪|发我)|"
+    r"(?:链接|网址).{0,8}(?:呢|在哪|发我|给我|没有|没看到|看不到)|"
+    r"(?:怎么|为什么).{0,12}(?:没|没有|不).{0,8}(?:链接|网址|HTML)"
+)
 _SECTION_HEADER = re.compile(r"^【([^】]+)】\s*(.*)$")
 _MARKDOWN_HEADER = re.compile(r"^#{1,4}\s+(.+?)\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)、])\s*(.+?)\s*$")
@@ -33,6 +39,12 @@ def is_html_delivery_request(message: str) -> bool:
     """Return true only when HTML is requested as a deliverable, not discussed."""
     text = re.sub(r"\s+", " ", str(message or "")).strip()
     return bool(text and _HTML_FORMAT.search(text) and _DELIVERY_ACTION.search(text))
+
+
+def is_html_delivery_followup(message: str) -> bool:
+    """Return true for status/link follow-ups that need prior HTML context."""
+    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    return bool(text and _DELIVERY_FOLLOWUP.search(text))
 
 
 @lru_cache(maxsize=1)

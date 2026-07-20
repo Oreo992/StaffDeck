@@ -22,7 +22,11 @@ from app.agents.branching import (
     visible_skill,
     visible_tool_rows,
 )
-from app.artifacts.html_delivery import HtmlArtifactPublisher, is_html_delivery_request
+from app.artifacts.html_delivery import (
+    HtmlArtifactPublisher,
+    is_html_delivery_followup,
+    is_html_delivery_request,
+)
 from app.core.conversation_context import build_conversation_context
 from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancelled
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
@@ -2826,7 +2830,10 @@ class AgentLoop:
     def _with_html_artifact(
         self, message: str, chat_session: ChatSession, reply: str
     ) -> str:
-        if not is_html_delivery_request(message):
+        delivery_message, request_message_id = self._html_delivery_request_context(
+            message, chat_session
+        )
+        if not delivery_message:
             return reply
         if not self.html_artifacts.enabled:
             return (
@@ -2835,18 +2842,15 @@ class AgentLoop:
             )
         title = str(getattr(chat_session, "title", "") or "Agent Team 报告").strip()
         artifact_id = f"{chat_session.id}-{new_id('artifact')}"
-        stored_results = (chat_session.slots_json or {}).get(TOOL_RESULTS_SLOT)
-        tool_results = (
-            [item for item in stored_results if isinstance(item, dict)]
-            if isinstance(stored_results, list)
-            else []
+        tool_results = self._html_artifact_tool_results(
+            chat_session, request_message_id=request_message_id
         )
         try:
             url = self.html_artifacts.publish(
                 title,
                 reply,
                 artifact_id,
-                message=message,
+                message=delivery_message,
                 tool_results=tool_results,
             )
         except Exception as exc:
@@ -2864,6 +2868,89 @@ class AgentLoop:
             {"url": url},
         )
         return f"{reply.rstrip()}\n\nHTML 报告公网链接：[打开 HTML 报告]({url})"
+
+    def _html_delivery_request_context(
+        self, message: str, chat_session: ChatSession
+    ) -> tuple[str | None, str | None]:
+        direct_request = is_html_delivery_request(message)
+        if not direct_request and not is_html_delivery_followup(message):
+            return None, None
+
+        recent_messages: list[Message] = []
+        if hasattr(self, "db"):
+            recent_messages = list(
+                self.db.exec(
+                    select(Message)
+                    .where(
+                        Message.tenant_id == chat_session.tenant_id,
+                        Message.session_id == chat_session.id,
+                        Message.role == "user",
+                    )
+                    .order_by(Message.created_at.desc())
+                    .limit(16)
+                ).all()
+            )
+
+        if direct_request:
+            request_id = next(
+                (
+                    row.id
+                    for row in recent_messages
+                    if str(row.content or "").strip() == str(message or "").strip()
+                ),
+                None,
+            )
+            return message, request_id
+
+        for row in recent_messages:
+            if is_html_delivery_request(row.content):
+                return row.content, row.id
+        return None, None
+
+    def _html_artifact_tool_results(
+        self,
+        chat_session: ChatSession,
+        *,
+        request_message_id: str | None,
+    ) -> list[dict[str, Any]]:
+        stored_results = (chat_session.slots_json or {}).get(TOOL_RESULTS_SLOT)
+        if isinstance(stored_results, list):
+            current_results = [item for item in stored_results if isinstance(item, dict)]
+            if current_results:
+                return current_results
+        if not request_message_id or not hasattr(self, "db"):
+            return []
+
+        events = self.db.exec(
+            select(AgentEvent)
+            .where(
+                AgentEvent.tenant_id == chat_session.tenant_id,
+                AgentEvent.session_id == chat_session.id,
+                AgentEvent.event_type == "tool_call_finished",
+            )
+            .order_by(AgentEvent.created_at.asc())
+        ).all()
+        recovered: list[dict[str, Any]] = []
+        for event in events:
+            payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+            if str(payload.get("user_message_id") or "") != request_message_id:
+                continue
+            raw_tool_call = payload.get("tool_call")
+            tool_call = raw_tool_call if isinstance(raw_tool_call, dict) else {}
+            recovered.append(
+                {
+                    "tool_name": payload.get("tool_name") or tool_call.get("name"),
+                    "arguments": (
+                        tool_call.get("arguments")
+                        if isinstance(tool_call.get("arguments"), dict)
+                        else {}
+                    ),
+                    "success": bool(payload.get("success")),
+                    "data": payload.get("data"),
+                    "error": payload.get("error"),
+                }
+            )
+        return recovered
 
     def _task_response_context(
         self,
