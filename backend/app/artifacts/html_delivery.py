@@ -12,7 +12,7 @@ from app.config import get_settings
 
 _HTML_FORMAT = re.compile(r"(?i)html|网页(?:版|链接|报告|看板)?|网页版|在线看板")
 _DELIVERY_ACTION = re.compile(
-    r"整理|生成|导出|转换|转成|做成|给我|发我|直接发|下载|链接|没有看到|没看到|看不到|打开"
+    r"整理|生成|导出|输出|呈现|转换|转成|做成|给我|发我|直接发|下载|链接|没有看到|没看到|看不到|打开"
 )
 
 

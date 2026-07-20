@@ -14,7 +14,13 @@ from app.db.models import ChatSession
 
 @pytest.mark.parametrize(
     "message",
-    ["全部整理成html", "请导出 HTML 报告", "我没有看到html", "给我一个网页版看板"],
+    [
+        "全部整理成html",
+        "请导出 HTML 报告",
+        "我没有看到html",
+        "给我一个网页版看板",
+        "把两个 ASIN 的对比以html格式呈现",
+    ],
 )
 def test_html_delivery_intent_is_detected(message: str) -> None:
     assert is_html_delivery_request(message)
