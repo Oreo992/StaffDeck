@@ -15,6 +15,8 @@ NeoSpark services.
 
 The private environment file must be mode `0600` and must never be committed. It needs a
 random `APP_SECRET` plus an OpenAI-compatible model URL, model name, and API key.
+`configure_rc_model.py` keeps `claude-opus-4-8` as the default and idempotently adds
+`claude-sonnet-4-6` as an enabled user-selectable RC route.
 
 Docker builds default to the DaoCloud base-image proxy, npmmirror for npm packages, and the
 Aliyun PyPI mirror. Override `NODE_IMAGE`, `PYTHON_IMAGE`, `NPM_REGISTRY`, or `PIP_INDEX_URL`
@@ -31,6 +33,8 @@ git merge --ff-only origin/preview
 docker compose -f deploy/preview/compose.yaml build
 docker compose -f deploy/preview/compose.yaml up -d
 curl --fail http://127.0.0.1:18173/api/health
+python3 deploy/preview/configure_rc_model.py
+python3 deploy/preview/verify_server.py
 ```
 
 After the first launch, rotate the seeded `admin` account password before exposing the

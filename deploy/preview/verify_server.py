@@ -12,6 +12,7 @@ BASE_URL = "https://preview.agentteam.neospark.cn"
 TENANT_ID = "tenant_demo"
 CREDENTIAL_FILE = Path("/data/staffdeck-preview/login-credentials.json")
 EXPECTED_MODEL = "claude-opus-4-8"
+EXPECTED_SELECTABLE_MODEL = "claude-sonnet-4-6"
 
 
 def request(
@@ -80,19 +81,31 @@ def main() -> None:
     if default_model.get("model") != EXPECTED_MODEL:
         raise RuntimeError("Default model is not the expected RC-backed route")
 
+    selectable_models = [
+        item
+        for item in models
+        if item.get("model") == EXPECTED_SELECTABLE_MODEL and item.get("enabled")
+    ]
+    if len(selectable_models) != 1:
+        raise RuntimeError("Expected exactly one enabled RC-backed Sonnet choice")
+    selectable_model = selectable_models[0]
+    if selectable_model.get("is_default"):
+        raise RuntimeError("The Sonnet choice must not replace the default model")
+
     test_result = request_json(
         "POST",
-        f"/api/enterprise/model-configs/{default_model['id']}/test?tenant_id={TENANT_ID}",
+        f"/api/enterprise/model-configs/{selectable_model['id']}/test?tenant_id={TENANT_ID}",
         payload={},
         token=token,
         timeout=660,
     )
     if not test_result.get("success"):
-        raise RuntimeError("Default model connectivity test failed")
+        raise RuntimeError("Selectable Sonnet model connectivity test failed")
 
     print(
         "Agent Team preview verification PASS "
-        f"model={default_model['model']} provider={default_model['provider']}"
+        f"default={default_model['model']} selectable={selectable_model['model']} "
+        f"provider={default_model['provider']}"
     )
 
 
