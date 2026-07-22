@@ -31,6 +31,10 @@ class LLMError(Exception):
 JSON_REPAIR_ATTEMPTS = 3
 EMPTY_RESPONSE_RETRIES = 2
 EMPTY_RESPONSE_MESSAGE = "Model returned an empty response"
+TEXT_ONLY_RETRY_MESSAGE = (
+    "上一条响应只返回了工具调用，但当前阶段不执行工具。"
+    "请现在直接输出完整的用户可见正文，不要调用工具，不要返回 tool_calls。"
+)
 DEFAULT_MODEL_API_TIMEOUT_SECONDS = 600.0
 DEFAULT_INPUT_TOKEN_BUDGET = 32_000
 TURN_STAGE_MESSAGE_MARKER = "_agent_turn_message"
@@ -107,7 +111,9 @@ class LLMClient:
                 )
             )
             empty_diagnostics: list[str] = []
+            attempt_messages = request_messages
             for attempt in range(EMPTY_RESPONSE_RETRIES + 1):
+                request["messages"] = attempt_messages
                 span = start_llm_call(
                     model=self.model,
                     endpoint=_endpoint_label(getattr(self, "base_url", "")),
@@ -152,6 +158,8 @@ class LLMClient:
                     **metrics,
                 )
                 empty_diagnostics.append(_completion_empty_diagnostic(completion, attempt + 1))
+                if _completion_has_tool_calls(completion):
+                    attempt_messages = _text_only_retry_messages(request_messages)
                 if attempt >= EMPTY_RESPONSE_RETRIES:
                     raise LLMError(_empty_response_detail(self, empty_diagnostics))
         except Exception as exc:
@@ -179,6 +187,7 @@ class LLMClient:
         )
         try:
             empty_diagnostics: list[str] = []
+            attempt_messages = request_messages
             for attempt in range(EMPTY_RESPONSE_RETRIES + 1):
                 span = start_llm_call(
                     model=self.model,
@@ -207,7 +216,7 @@ class LLMClient:
                 try:
                     stream = self.client.chat.completions.create(
                         model=self.model,
-                        messages=request_messages,
+                        messages=attempt_messages,
                         temperature=self.temperature,
                         max_tokens=max_output_tokens,
                         stream=True,
@@ -305,6 +314,8 @@ class LLMClient:
                         response_ids,
                     )
                 )
+                if "tool_calls" in finish_reasons:
+                    attempt_messages = _text_only_retry_messages(request_messages)
             raise LLMError(_empty_response_detail(self, empty_diagnostics))
         except Exception as exc:
             if isinstance(exc, LLMError):
@@ -767,6 +778,18 @@ def _content_part_text(item: Any) -> str:
         return text["value"]
     value = getattr(text, "value", None)
     return value if isinstance(value, str) else ""
+
+
+def _text_only_retry_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [*messages, {"role": "user", "content": TEXT_ONLY_RETRY_MESSAGE}]
+
+
+def _completion_has_tool_calls(completion: Any) -> bool:
+    choices = getattr(completion, "choices", None) or []
+    if not choices:
+        return False
+    message = getattr(choices[0], "message", None)
+    return bool(getattr(message, "tool_calls", None))
 
 
 def _completion_empty_diagnostic(completion: Any, attempt: int) -> str:

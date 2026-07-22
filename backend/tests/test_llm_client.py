@@ -271,6 +271,37 @@ def test_generate_text_retries_empty_response():
     assert len(client.client.chat.completions.calls) == 3
 
 
+def test_generate_text_retries_tool_call_only_response_with_text_only_instruction():
+    client = object.__new__(LLMClient)
+    client.client = _FakeOpenAIClient()
+    client.model = "demo-model"
+    client.temperature = 0.2
+    client.max_output_tokens = 256
+    responses = iter(["tool_call", "content"])
+
+    def fake_create(**kwargs):  # noqa: ANN003
+        client.client.chat.completions.calls.append(kwargs)
+        response_type = next(responses)
+        if response_type == "content":
+            return _completion_with_content("最终正文")
+        message = type(
+            "Message",
+            (),
+            {"content": None, "tool_calls": [object()], "reasoning_content": None},
+        )()
+        choice = type("Choice", (), {"message": message, "finish_reason": "tool_calls"})()
+        return type("Completion", (), {"choices": [choice]})()
+
+    client.client.chat.completions.create = fake_create
+
+    assert client.generate_text("system prompt", {"hello": "world"}) == "最终正文"
+    calls = client.client.chat.completions.calls
+    assert len(calls) == 2
+    assert calls[0]["messages"][-1]["content"] == '{"hello": "world"}'
+    assert calls[1]["messages"][-1]["role"] == "user"
+    assert "不要调用工具" in calls[1]["messages"][-1]["content"]
+
+
 def test_generate_text_records_each_empty_response_retry():
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
@@ -375,6 +406,33 @@ def test_generate_text_stream_reports_empty_stream_diagnostics():
     assert "reasoning_chars=14" in detail
     assert len(client.client.chat.completions.calls) == 3
     assert all(call["messages"][0] == {"role": "system", "content": "system prompt"} for call in client.client.chat.completions.calls)
+
+
+def test_generate_text_stream_retries_tool_call_only_finish_as_text_only():
+    client = object.__new__(LLMClient)
+    client.client = _FakeOpenAIClient()
+    client.model = "demo-model"
+    client.temperature = 0.2
+    client.max_output_tokens = 256
+    attempts = iter(["tool_calls", "content"])
+
+    def fake_create(**kwargs):  # noqa: ANN003
+        client.client.chat.completions.calls.append(kwargs)
+        result = next(attempts)
+        if result == "content":
+            delta = type("Delta", (), {"content": "最终正文", "reasoning_content": None})()
+            choice = type("Choice", (), {"delta": delta, "finish_reason": "stop"})()
+        else:
+            delta = type("Delta", (), {"content": None, "reasoning_content": None})()
+            choice = type("Choice", (), {"delta": delta, "finish_reason": "tool_calls"})()
+        return iter([type("Chunk", (), {"id": "chunk_demo", "choices": [choice]})()])
+
+    client.client.chat.completions.create = fake_create
+
+    assert "".join(client.generate_text_stream("system prompt", {"hello": "world"})) == "最终正文"
+    calls = client.client.chat.completions.calls
+    assert len(calls) == 2
+    assert "不要调用工具" in calls[1]["messages"][-1]["content"]
 
 
 def test_generate_text_stream_records_ttft_and_output_volume():
