@@ -1037,21 +1037,41 @@ def _index(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
     return {str(row.get(key)): row for row in rows if row.get(key) is not None}
 
 
+def _select_managed_agent(
+    candidates: list[dict[str, Any]], desired_name: str
+) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+    return next(
+        (item for item in candidates if str(item.get("name")) == desired_name),
+        candidates[0],
+    )
+
+
 def apply_manifest(api: StaffDeckApi, manifest: dict[str, Any]) -> dict[str, Any]:
     tenant_id = str(manifest["tenant_id"])
     report: dict[str, Any] = {"created": {}, "updated": {}, "warnings": list(manifest["warnings"])}
 
     agents = api.request("GET", api.query_path("/api/enterprise/agents", tenant_id=tenant_id))
-    by_source = {
-        str(item.get("metadata", {}).get("source_agent_id")): item
-        for item in agents
-        if item.get("metadata", {}).get("migration_source") == MIGRATION_SOURCE
-    }
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for item in agents:
+        metadata = item.get("metadata", {})
+        if metadata.get("migration_source") != MIGRATION_SOURCE:
+            continue
+        source_id = str(metadata.get("source_agent_id") or "")
+        if source_id:
+            by_source.setdefault(source_id, []).append(item)
     by_name = _index(agents, "name")
     agent_rows: dict[str, dict[str, Any]] = {}
     for agent in manifest["agents"]:
         source_id = str(agent["source_id"])
-        current = by_source.get(source_id)
+        candidates = by_source.get(source_id, [])
+        current = _select_managed_agent(candidates, str(agent["name"]))
+        if len(candidates) > 1:
+            report["warnings"].append(
+                f"Multiple managed agents share source id {source_id}; "
+                f"updated {current['id']} and preserved the other records"
+            )
         payload = {
             "tenant_id": tenant_id,
             "name": agent["name"],

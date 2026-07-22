@@ -11,6 +11,7 @@ from app.agent_team_migration import (
     SHARED_AMAZON_RESEARCH_TOOLS,
     SOP_TEMPLATES,
     _safe_text,
+    _select_managed_agent,
     _sanitize_persona,
     compile_manifest,
 )
@@ -38,6 +39,16 @@ mcp__studio__studio_report
     assert LEGACY_PATH_PATTERN.search(result) is None
     assert "$TASK_DIR" not in result
     assert "mcp__studio__studio_report" not in result
+
+
+def test_duplicate_migration_source_prefers_the_record_with_the_desired_name() -> None:
+    candidates = [
+        {"id": "renamed", "name": "QQQ"},
+        {"id": "canonical", "name": "小辰"},
+    ]
+
+    assert _select_managed_agent(candidates, "小辰")["id"] == "canonical"
+    assert _select_managed_agent(candidates, "不存在")["id"] == "renamed"
 
 
 def test_all_curated_sops_are_valid_staffdeck_graphs() -> None:
