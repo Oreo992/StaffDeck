@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.0.3"
+MIGRATION_VERSION = "1.0.4"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -41,6 +41,7 @@ ACTIVE_GENERAL_SKILLS = {
     "customer-insight-feedback",
     "customer-research-synthesis",
     "customer-service",
+    "discover-crossborder-market-trends",
     "decision-engine",
     "deep-analysis",
     "detail-page-replica-system",
@@ -160,6 +161,25 @@ AGENT_TOOL_BINDINGS = {
         "at_sorftime.category_report",
         "at_sorftime.product_search",
         "at_sorftime.product_trend",
+    ],
+    "crossborder-trend-researcher": [
+        "at_sellersprite.google_trend",
+        "at_sellersprite.keyword_research",
+        "at_sellersprite.market_research",
+        "at_sellersprite.market_research_statistics",
+        "at_sellersprite.market_brand_concentration",
+        "at_sellersprite.market_product_concentration",
+        "at_sellersprite.market_price_distribution",
+        "at_sellersprite.product_research",
+        "at_sorftime.category_report",
+        "at_sorftime.keyword_detail",
+        "at_sorftime.keyword_trend",
+        "at_sorftime.product_search",
+        "at_sorftime.product_search_from_history",
+        "at_sorftime.product_trend",
+        "at_sorftime.tiktok_product_trend",
+        "at_sorftime.walmart_product_trend_by_product_id",
+        "at_sorftime.ali1688_product_search",
     ],
 }
 
@@ -510,6 +530,121 @@ SOP_TEMPLATES = {
             "asset_type": "主图与 A+ 核心模块",
             "product_assets": "缺失时使用明确占位和素材待办",
             "copy_brief": "根据已知卖点形成待确认文案层级",
+        },
+    ),
+    "crossborder-trend-researcher": _linear_sop(
+        "crossborder-market-trends",
+        "跨境品类风口研究 · 多渠道机会发现",
+        "从中文父品类建立候选池，用长期趋势、当前供需和跨渠道证据筛选增长细分，并交付可审计的 HTML/XLSX 报告。",
+        [
+            _node(
+                "collect_scope",
+                "确认父品类与默认范围",
+                "确认中文父品类；目标市场、英文边界、研究周期、季节窗口、禁售约束和可用账号均为非关键信息。市场缺失时默认 Amazon 美国站，周期默认最近四个完整历史年份加当年可比周期，其余未知项标注暂无/不清楚后直接开始，不得追问。",
+                expected=["parent_category"],
+            ),
+            _node(
+                "channel_roadmap",
+                "制定渠道路线图",
+                "说明外部趋势、目标电商平台、第三方电商数据、评论社区、TikTok/Walmart/1688 分别回答什么问题，按当前已绑定只读工具直接推进；只有真实遇到登录、订阅或最小导出阻塞时才暂停，并且每次只给用户一个操作。",
+            ),
+            _node(
+                "candidate_pool",
+                "建立细分类目候选池",
+                "从父品类出发，结合至少三类发现信号生成 10—30 个候选细分类目；先求覆盖，再排除明显不相关项，不围绕用户随口提到的单一细分倒推结论。",
+                node_type="tool_call",
+                actions=[
+                    "continue_flow",
+                    "call_tool:at_sellersprite.market_research",
+                    "call_tool:at_sellersprite.product_research",
+                    "call_tool:at_sorftime.category_report",
+                    "call_tool:at_sorftime.product_search",
+                ],
+            ),
+            _node(
+                "keyword_map",
+                "构建双语关键词簇",
+                "为候选整理产品形态、功能结果、材料/技术、人群/痛点、场景/季节五类双语关键词；每个英文词附中文翻译，品牌、规格和价格只作辅助标签。",
+                node_type="tool_call",
+                actions=[
+                    "continue_flow",
+                    "call_tool:at_sellersprite.keyword_research",
+                    "call_tool:at_sorftime.keyword_detail",
+                ],
+            ),
+            _node(
+                "collect_evidence",
+                "采集可追溯原始证据",
+                "按候选采集市场、关键词、商品、价格、品牌集中度和跨平台信号；每个数值保留来源、单位、市场、时间窗、采集日期和 URL。工具空结果必须标数据缺口，禁止用模型记忆补数。",
+                node_type="tool_call",
+                actions=[
+                    "continue_flow",
+                    "call_tool:at_sellersprite.market_research_statistics",
+                    "call_tool:at_sellersprite.market_brand_concentration",
+                    "call_tool:at_sellersprite.market_product_concentration",
+                    "call_tool:at_sellersprite.market_price_distribution",
+                    "call_tool:at_sorftime.product_search_from_history",
+                ],
+            ),
+            _node(
+                "long_term_trend",
+                "验证长期趋势",
+                "使用至少三个完整历史年份检验方向、正增长频率、增速、季节性、区域扩散和关键词簇扩张；未完整当年不进入完整年度 CAGR，只与往年相同月份或季节窗口比较。",
+                node_type="tool_call",
+                actions=[
+                    "continue_flow",
+                    "call_tool:at_sellersprite.google_trend",
+                    "call_tool:at_sorftime.keyword_trend",
+                    "call_tool:at_sorftime.product_trend",
+                ],
+            ),
+            _node(
+                "supply_demand",
+                "分析当期供需",
+                "仅在同一来源、市场、时间窗和定义内比较需求增长与供给增长，识别需求快于供给的候选；不得跨源相加绝对值，不得把 CPC、播放量或商品数解释为销量。",
+            ),
+            _node(
+                "cross_channel",
+                "验证跨渠道共振与反证",
+                "用 Amazon、外部趋势、TikTok、Walmart、1688 等相互独立信号检查方向一致和因果逻辑，并主动寻找单一品牌、爆款或事件驱动等反证。跨渠道共振不表示数值可比。",
+                node_type="tool_call",
+                actions=[
+                    "continue_flow",
+                    "call_tool:at_sorftime.tiktok_product_trend",
+                    "call_tool:at_sorftime.walmart_product_trend_by_product_id",
+                    "call_tool:at_sorftime.ali1688_product_search",
+                ],
+            ),
+            _node(
+                "score_decide",
+                "评分与决策门",
+                "基于长期增长、当前需求、供需差、跨渠道共振、品牌进入空间和证据完整度评分；检查专利、设计买断、模具、认证、MOQ、物流等高成本壁垒。关键证据不足时标数据不足，不强行排名。",
+            ),
+            _node(
+                "deliver_report",
+                "交付 HTML/XLSX 研究报告",
+                "先交付候选机会、证据、反证、风险、下一步验证、通过标准和停止条件，并区分事实、计算、推断与假设。用户要求 HTML 时由平台发布并追加真实公网链接；用户要求 XLSX 时按技能工作簿契约生成真实附件或下载链接。链接或附件返回前不得声称已生成。",
+                node_type="response",
+                actions=["answer_user"],
+            ),
+        ],
+        triggers=[
+            "帮我找这个品类的海外风口",
+            "从父品类研究增长细分",
+            "做跨境品类机会研究",
+            "分析这个品类的趋势和供需",
+        ],
+        goals=[
+            "建立可审计的细分类目候选池",
+            "验证长期趋势、当前供需与跨渠道共振",
+            "形成带反证和决策门的 HTML/XLSX 报告",
+        ],
+        optional_defaults={
+            "target_market": "Amazon 美国站",
+            "english_boundary": "由父品类提出首版英文边界并标注",
+            "time_window": "最近四个完整历史年份加当年可比周期",
+            "seasonal_window": "根据品类提出首版季节窗口",
+            "constraints": "未知项标注暂无/不清楚，候选出现后再核查高成本壁垒",
         },
     ),
     "researcher": _linear_sop(

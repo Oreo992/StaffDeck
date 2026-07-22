@@ -49,6 +49,7 @@ def test_all_curated_sops_are_valid_staffdeck_graphs() -> None:
         "cc-cs",
         "cc-art",
         "researcher",
+        "crossborder-trend-researcher",
     }
     for content in SOP_TEMPLATES.values():
         card = SkillCard.model_validate(content)
@@ -66,6 +67,7 @@ def test_all_migrated_sops_only_block_on_minimum_identity_fields() -> None:
         "cc-cs": [],
         "cc-art": [],
         "researcher": ["research_question"],
+        "crossborder-trend-researcher": ["parent_category"],
     }
 
     for source_id, expected_fields in expected_by_agent.items():
@@ -110,6 +112,56 @@ def test_amazon_research_fetches_real_history_for_html_dashboard() -> None:
     assert "不得伪造趋势" in secondary["instruction"]
 
 
+def test_crossborder_trend_research_sop_covers_the_full_evidence_workflow() -> None:
+    content = SOP_TEMPLATES["crossborder-trend-researcher"]
+    node_ids = [node["node_id"] for node in content["nodes"]]
+
+    assert node_ids == [
+        "collect_scope",
+        "channel_roadmap",
+        "candidate_pool",
+        "keyword_map",
+        "collect_evidence",
+        "long_term_trend",
+        "supply_demand",
+        "cross_channel",
+        "score_decide",
+        "deliver_report",
+    ]
+    assert content["slot_filling_policy"]["optional_defaults"]["target_market"] == "Amazon 美国站"
+    serialized = json.dumps(content, ensure_ascii=False)
+    for required_phrase in ("10—30", "双语", "完整历史年份", "供需", "跨渠道", "HTML", "XLSX", "公网链接"):
+        assert required_phrase in serialized
+
+
+@pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
+def test_crossborder_trend_researcher_has_dedicated_skill_and_read_only_data_tools() -> None:
+    manifest = compile_manifest(REAL_SOURCE, "demo-ecom")
+    agent = next(
+        item for item in manifest["agents"] if item["source_id"] == "crossborder-trend-researcher"
+    )
+    skill = next(
+        item
+        for item in manifest["general_skills"]
+        if item["slug"] == "agent-team-discover-crossborder-market-trends"
+    )
+
+    assert skill["status"] == "published"
+    assert "agent-team-discover-crossborder-market-trends" in agent["general_skill_slugs"]
+    assert SOP_TEMPLATES["crossborder-trend-researcher"]["skill_id"] in agent["sop_skill_ids"]
+    assert {
+        "at_sellersprite.google_trend",
+        "at_sellersprite.keyword_research",
+        "at_sellersprite.market_research",
+        "at_sorftime.category_report",
+        "at_sorftime.keyword_trend",
+        "at_sorftime.product_search",
+        "at_sorftime.tiktok_product_trend",
+        "at_sorftime.walmart_product_trend_by_product_id",
+        "at_sorftime.ali1688_product_search",
+    }.issubset(agent["tool_names"])
+
+
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="Agent Team source checkout is not available")
 def test_every_migrated_agent_can_route_to_shared_amazon_research() -> None:
     manifest = compile_manifest(REAL_SOURCE, "demo-ecom")
@@ -126,10 +178,10 @@ def test_real_demo_ecom_manifest_has_expected_inventory_and_is_deterministic() -
     second = compile_manifest(REAL_SOURCE, "demo-ecom")
 
     assert first["counts"] == {
-        "agents": 7,
-        "general_skills": 29,
-        "published_general_skills": 16,
-        "sops": 7,
+        "agents": 8,
+        "general_skills": 30,
+        "published_general_skills": 17,
+        "sops": 8,
         "mcp_servers": 2,
         "mcp_tools": 35,
     }
