@@ -3657,11 +3657,13 @@ function normalizeSkillNodes(skill: SkillCard): Array<Record<string, unknown>> {
 
 function normalizeSkillEdges(skill: SkillCard): Array<Record<string, unknown>> {
   return Array.isArray(skill.edges) ? skill.edges.filter(isRecord).map((edge, index) => ({
+    ...edge,
     source_node_id: String(edge.source_node_id || ''),
     next_node_id: String(edge.next_node_id || ''),
     condition: typeof edge.condition === 'string' ? edge.condition : '',
     priority: Number.isFinite(Number(edge.priority)) ? Number(edge.priority) : index,
     label: typeof edge.label === 'string' ? edge.label : '',
+    predicate_json: isRecord(edge.predicate_json) ? edge.predicate_json : undefined,
   })) : [];
 }
 

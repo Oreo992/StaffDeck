@@ -320,6 +320,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   const [selectedModelConfigId, setSelectedModelConfigId] = useState(
     () => window.localStorage.getItem(modelStorageKey(tenantId)) || '',
   );
+  const [selectedRuntimeMode, setSelectedRuntimeMode] = useState<'legacy' | 'claude_supervised'>('legacy');
   const [modelConfigsLoading, setModelConfigsLoading] = useState(Boolean(auth));
   const [modelConfigsLoadError, setModelConfigsLoadError] = useState('');
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
@@ -364,6 +365,10 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     show_tool_trace: true,
     reflection_max_rounds: 1,
     agent_loop_max_actions: 6,
+    claude_runtime_enabled: false,
+    claude_model_config_id: null,
+    claude_skill_allowlist: [],
+    claude_max_repair_rounds: 2,
     updated_at: '',
   });
   const chatMessagesRef = useRef<HTMLDivElement>(null);
@@ -517,6 +522,26 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     ? agents.find((agent) => agent.id === currentSession.agent_id) || null
     : null;
   const displayedAgent = invalidDraftAgentId || draftAgentLoading ? null : (sessionAgent || draftAgent || defaultAgent);
+  const canUseClaudeRuntime = Boolean(
+    uiConfig.claude_runtime_enabled
+    && uiConfig.claude_model_config_id
+    && uiConfig.claude_skill_allowlist.length > 0
+    && modelConfigs.some((model) => (
+      model.id === uiConfig.claude_model_config_id
+      && model.enabled
+      && model.provider === 'claude_agent_sdk'
+    ))
+  );
+  const effectiveRuntimeMode = currentSession?.runtime_mode || selectedRuntimeMode;
+  const runtimeModeLocked = !isDraftConversation;
+  const changeRuntimeMode = useCallback((mode: 'legacy' | 'claude_supervised') => {
+    if (runtimeModeLocked) return;
+    if (mode === 'claude_supervised' && !canUseClaudeRuntime) {
+      notify.warning('Claude Runtime 尚未由管理员配置或没有开放 SOP');
+      return;
+    }
+    setSelectedRuntimeMode(mode);
+  }, [canUseClaudeRuntime, runtimeModeLocked]);
   const displayedProfile = displayedAgent ? employeeProfile(displayedAgent) : null;
   const emptyProfileTags = displayedProfile?.workStyles.length
     ? displayedProfile.workStyles.slice(0, 3)
@@ -2867,6 +2892,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
         user_id: userId,
         agent_id: sessionAgentId,
         status: 'active',
+        runtime_mode: prepared.runtimeMode || 'legacy',
         summary: userText || undefined,
         last_agent_question: userText || undefined,
         updated_at: now,
@@ -2924,6 +2950,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
         interaction_mode: resolvedInteractionMode,
         client_timezone: getClientTimeZone(),
         model_config_id: prepared.modelConfigId,
+        runtime_mode: prepared.runtimeMode,
       };
       if (!startedAsDraftConversation) {
         requestBody.session_id = currentConversationId;
@@ -3101,6 +3128,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       attachments: readyComposerAttachments.map(toRequestAttachment),
       interactionMode: resolvedInteractionMode,
       modelConfigId: selectedModelConfig?.id,
+      runtimeMode: activeSession?.runtime_mode || selectedRuntimeMode,
       createdAt: new Date().toISOString(),
     };
     setInput('');
@@ -3137,6 +3165,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     replyToHandoff,
     selectedAgentId,
     selectedModelConfig?.id,
+    selectedRuntimeMode,
     sessionId,
     sessions,
     sessionsLoading,
@@ -3300,6 +3329,10 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     enabledModelConfigs,
     selectedModelConfig,
     changeModelConfig,
+    effectiveRuntimeMode,
+    runtimeModeLocked,
+    canUseClaudeRuntime,
+    changeRuntimeMode,
     showModelSetupNotice,
     modelSetupNoticeText,
     tenantId,

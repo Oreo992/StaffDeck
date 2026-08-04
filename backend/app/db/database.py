@@ -115,6 +115,13 @@ def _migrate_sqlite_skill_schema() -> None:
             if "context_state_json" not in session_columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN context_state_json JSON"))
                 conn.execute(text("UPDATE sessions SET context_state_json = '{}'"))
+            if "runtime_mode" not in session_columns:
+                conn.execute(
+                    text("ALTER TABLE sessions ADD COLUMN runtime_mode VARCHAR NOT NULL DEFAULT 'legacy'")
+                )
+            if "runtime_state_json" not in session_columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN runtime_state_json JSON"))
+                conn.execute(text("UPDATE sessions SET runtime_state_json = '{}'"))
 
         if "messages" in tables:
             message_columns = {column["name"] for column in inspector.get_columns("messages")}
@@ -139,6 +146,8 @@ def _migrate_sqlite_skill_schema() -> None:
                     conn.execute(text("UPDATE tools SET allowed_skills_json = '[]'"))
             if "mcp_server_id" not in tool_columns:
                 conn.execute(text("ALTER TABLE tools ADD COLUMN mcp_server_id VARCHAR"))
+            if "effect_level" not in tool_columns:
+                conn.execute(text("ALTER TABLE tools ADD COLUMN effect_level VARCHAR"))
 
         if "ui_configs" in tables:
             ui_columns = {column["name"] for column in inspector.get_columns("ui_configs")}
@@ -149,6 +158,25 @@ def _migrate_sqlite_skill_schema() -> None:
             if "agent_loop_max_actions" not in ui_columns:
                 conn.execute(
                     text("ALTER TABLE ui_configs ADD COLUMN agent_loop_max_actions INTEGER NOT NULL DEFAULT 6")
+                )
+            if "claude_runtime_enabled" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN claude_runtime_enabled "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            if "claude_model_config_id" not in ui_columns:
+                conn.execute(text("ALTER TABLE ui_configs ADD COLUMN claude_model_config_id VARCHAR"))
+            if "claude_skill_allowlist_json" not in ui_columns:
+                conn.execute(text("ALTER TABLE ui_configs ADD COLUMN claude_skill_allowlist_json JSON"))
+                conn.execute(text("UPDATE ui_configs SET claude_skill_allowlist_json = '[]'"))
+            if "claude_max_repair_rounds" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN claude_max_repair_rounds "
+                        "INTEGER NOT NULL DEFAULT 2"
+                    )
                 )
 
         if "skill_feedback" in tables:

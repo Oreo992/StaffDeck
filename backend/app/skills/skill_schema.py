@@ -25,6 +25,7 @@ class SkillGraphEdge(BaseModel):
     condition: Optional[str] = None
     priority: int = 0
     label: Optional[str] = None
+    predicate_json: Optional[dict[str, Any]] = None
 
 
 class SkillCard(BaseModel):

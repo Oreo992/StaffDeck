@@ -82,6 +82,7 @@ const TOOL_PAGE_SIZE = 10;
 const TOOL_FORM_INITIAL_VALUES = {
   tool_type: 'http',
   method: 'POST',
+  effect_level: '',
   enabled: true,
   bucket: '未分桶',
   headers: '{}',
@@ -1766,7 +1767,7 @@ function ToolFormFields({
         />
       </Field>
 
-      <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-[140px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-[140px_180px_minmax(0,1fr)]">
         <Field label="HTTP Method">
           <UISelect value={values.method} onValueChange={(value) => setField('method', value)}>
             <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
@@ -1776,6 +1777,22 @@ function ToolFormFields({
               {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((value) => (
                 <SelectItem key={value} value={value}>{value}</SelectItem>
               ))}
+            </SelectContent>
+          </UISelect>
+        </Field>
+        <Field label="副作用级别" hint="自动：GET 为只读，其他方法为写入；需确认配置按破坏性处理。">
+          <UISelect
+            value={values.effect_level || 'auto'}
+            onValueChange={(value) => setField('effect_level', value === 'auto' ? '' : value)}
+          >
+            <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">自动判断</SelectItem>
+              <SelectItem value="read">只读</SelectItem>
+              <SelectItem value="write">写入</SelectItem>
+              <SelectItem value="destructive">破坏性</SelectItem>
             </SelectContent>
           </UISelect>
         </Field>
@@ -2054,6 +2071,7 @@ function toolToFormValues(row: ToolRead): ToolFormValues {
     input_schema: JSON.stringify(row.input_schema || {}, null, 2),
     output_schema: JSON.stringify(row.output_schema || {}, null, 2),
     allowed_skills: (row.allowed_skills || []).join(','),
+    effect_level: row.effect_level || '',
   };
 }
 
@@ -2074,6 +2092,7 @@ function buildToolPayload(values: ToolFormValues) {
       input_schema: parseJson(values.input_schema, {}),
       output_schema: parseJson(values.output_schema, {}),
       allowed_skills: String(values.allowed_skills || '').split(',').map((item) => item.trim()).filter(Boolean),
+      effect_level: values.effect_level || null,
       enabled: values.enabled,
     };
   } catch {

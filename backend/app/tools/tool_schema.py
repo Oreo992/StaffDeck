@@ -20,6 +20,7 @@ class ToolCreateRequest(BaseModel):
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     allowed_skills: list[str] = Field(default_factory=list)
+    effect_level: Optional[Literal["read", "write", "destructive"]] = None
     enabled: bool = True
 
 
@@ -44,6 +45,7 @@ class ToolRead(BaseModel):
     output_schema: dict[str, Any]
     allowed_skills: list[str]
     mcp_server_id: Optional[str] = None
+    effect_level: Optional[str] = None
     enabled: bool
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str

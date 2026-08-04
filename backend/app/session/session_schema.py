@@ -19,6 +19,7 @@ RouterDecisionValue = Literal[
     "clarify",
 ]
 MessageFeedbackValue = Literal["up", "down"]
+RuntimeModeValue = Literal["legacy", "claude_supervised"]
 
 
 class TaskFrame(BaseModel):
@@ -136,6 +137,7 @@ class SessionPublic(BaseModel):
     summary: Optional[str] = None
     last_agent_question: Optional[str] = None
     status: str = "active"
+    runtime_mode: RuntimeModeValue = "legacy"
 
 
 class ChatTurnRequest(BaseModel):
@@ -143,6 +145,7 @@ class ChatTurnRequest(BaseModel):
     session_id: Optional[str] = None
     agent_id: Optional[str] = None
     model_config_id: Optional[str] = None
+    runtime_mode: Optional[RuntimeModeValue] = None
     client_turn_id: Optional[str] = None
     user_id: Optional[str] = None
     message: str
@@ -180,6 +183,7 @@ class ChatSessionCreateRequest(BaseModel):
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     title: Optional[str] = None
+    runtime_mode: RuntimeModeValue = "legacy"
 
 
 class ChatSessionUpdateRequest(BaseModel):
@@ -200,6 +204,7 @@ class ChatSessionRead(BaseModel):
     summary: Optional[str]
     last_agent_question: Optional[str]
     is_scheduled: bool = False
+    runtime_mode: RuntimeModeValue = "legacy"
     created_at: str
     updated_at: str
 

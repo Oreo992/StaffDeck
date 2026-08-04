@@ -346,6 +346,10 @@ class UIConfig(SQLModel, table=True):
     show_tool_trace: bool = True
     reflection_max_rounds: int = 1
     agent_loop_max_actions: int = 6
+    claude_runtime_enabled: bool = False
+    claude_model_config_id: Optional[str] = None
+    claude_skill_allowlist_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    claude_max_repair_rounds: int = 2
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -433,6 +437,7 @@ class Tool(SQLModel, table=True):
     output_schema: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     allowed_skills_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     mcp_server_id: Optional[str] = Field(default=None, index=True)
+    effect_level: Optional[str] = Field(default=None, index=True)
     enabled: bool = True
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -503,6 +508,8 @@ class ChatSession(SQLModel, table=True):
     awaiting_input_json: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     knowledge_context_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     context_state_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    runtime_mode: str = Field(default="legacy", index=True)
+    runtime_state_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     summary: Optional[str] = None
     last_agent_question: Optional[str] = None
     status: str = "active"

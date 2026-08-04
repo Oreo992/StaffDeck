@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import queue
 import re
 import threading
@@ -70,6 +71,15 @@ from app.observability.spans import llm_operation
 from app.memory.jobs import enqueue_memory_capture
 from app.memory.service import MemoryService, memory_read
 from app.observability import EventLog
+from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
+from app.runtime.contracts import (
+    HarnessRunRequest,
+    HarnessTool,
+    SopAuditOutcome,
+    ToolEffectLevel,
+)
+from app.runtime.sop_supervisor import EvidenceLedger, SopSupervisor, tool_effect_level
+from app.security.encryption import decrypt_secret
 from app.session.attachments import (
     message_content_with_attachment_context,
     message_images_from_metadata,
@@ -251,6 +261,13 @@ class QueuedTaskContinuation:
     tool_result: ToolResult | None
 
 
+@dataclass
+class ClaudeSupervisedOutcome:
+    reply: str
+    step_result: StepAgentResult
+    tool_result: ToolResult | None = None
+
+
 class AgentLoop:
     def __init__(self, db: Session):
         self.db = db
@@ -265,6 +282,8 @@ class AgentLoop:
         self.general_skill_runner = GeneralSkillRunner()
         self.tool_executor = ToolExecutor(db)
         self.memory = MemoryService(db)
+        self.claude_runtime = ClaudeAgentSdkAdapter()
+        self.sop_supervisor = SopSupervisor()
         self._validated_general_skill_calls: set[tuple[str, str, str]] = set()
 
     def _turn_payload(self, payload: dict[str, Any], user_message_id: str | None) -> dict[str, Any]:
@@ -368,6 +387,8 @@ class AgentLoop:
         return remaining
 
     def handle_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
+        if self._request_uses_claude_supervised_runtime(request):
+            return self._consume_claude_supervised_stream(request)
         router_decision: RouterDecision | None = None
         step_result = StepAgentResult()
         tool_result: ToolResult | None = None
@@ -580,6 +601,46 @@ class AgentLoop:
             router_decision=router_decision,
             step_result=step_result,
             tool_result=tool_result,
+            session_state=public_session(chat_session),
+        )
+
+    def _request_uses_claude_supervised_runtime(self, request: ChatTurnRequest) -> bool:
+        if request.runtime_mode == "claude_supervised":
+            return True
+        if not request.session_id:
+            return False
+        chat_session = self.db.get(ChatSession, request.session_id)
+        return bool(
+            chat_session
+            and chat_session.tenant_id == request.tenant_id
+            and self._is_claude_supervised_session(chat_session)
+        )
+
+    def _consume_claude_supervised_stream(self, request: ChatTurnRequest) -> ChatTurnResponse:
+        """Keep the non-stream endpoint on the same supervised implementation."""
+        chunks: list[str] = []
+        latest_session_id = str(request.session_id or "")
+        for item in self.handle_turn_stream(request):
+            event_name = str(item.get("event") or "")
+            data = item.get("data")
+            if not isinstance(data, dict):
+                continue
+            latest_session_id = str(data.get("sessionId") or latest_session_id)
+            if event_name == "stream_delta":
+                chunks.append(str(data.get("content") or ""))
+            if event_name == "complete":
+                return ChatTurnResponse.model_validate(data)
+
+        chat_session = self.db.get(ChatSession, latest_session_id) if latest_session_id else None
+        if chat_session is None:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_incomplete",
+                "Claude Supervised Runtime 未能持久化本次会话。",
+            )
+        return ChatTurnResponse(
+            reply="".join(chunks).strip() or FALLBACK_REPLY,
+            session_id=chat_session.id,
+            step_result=StepAgentResult(),
             session_state=public_session(chat_session),
         )
 
@@ -1706,14 +1767,25 @@ class AgentLoop:
             yield self._stream_status(
                 chat_session, "routing", "正在判断用户意图", user_message_id=user_message_id
             )
-            router_decision = self.router.decide(
-                request.message,
-                chat_session,
-                skills,
-                model_config,
-                conversation_context,
-                memory_context,
-            )
+            if self._is_claude_supervised_session(chat_session) and chat_session.active_skill_id:
+                router_decision = RouterDecision(
+                    decision="continue_active",
+                    target_skill_id=chat_session.active_skill_id,
+                    target_step_id=chat_session.active_step_id,
+                    confidence=1.0,
+                    user_intent="继续当前 Claude Supervised SOP",
+                    reason="Runtime 已按会话锁定；继续当前 SOP，不重复调用 Router。",
+                    source_message=request.message,
+                )
+            else:
+                router_decision = self.router.decide(
+                    request.message,
+                    chat_session,
+                    skills,
+                    model_config,
+                    conversation_context,
+                    memory_context,
+                )
             turn_followup_frames = self._turn_followup_task_frames(router_decision)
             hydrated_slots = self._hydrate_router_decision_from_context(
                 chat_session, router_decision, skills, memory_context
@@ -1779,6 +1851,77 @@ class AgentLoop:
             active_skill = self._get_active_skill(
                 request.tenant_id, chat_session.active_skill_id, chat_session.agent_id
             )
+            if self._is_claude_supervised_session(chat_session):
+                if not active_skill:
+                    raise AgentLoopPreconditionError(
+                        "claude_runtime_requires_skill",
+                        "Claude Supervised Runtime Pilot 只能执行已发布且在白名单中的 SOP。",
+                    )
+                yield self._stream_event(
+                    "skill_state",
+                    chat_session,
+                    self._skill_state_payload(
+                        chat_session,
+                        skills,
+                        self._runtime_stream_context(
+                            router_decision, before_skill, before_step, chat_session
+                        ),
+                        user_message_id=user_message_id,
+                    ),
+                )
+                yield self._stream_status(
+                    chat_session,
+                    "claude_supervised",
+                    "Claude 正在执行受 StaffDeck 监督的 SOP",
+                    {
+                        "active_skill_id": chat_session.active_skill_id,
+                        "active_step_id": chat_session.active_step_id,
+                    },
+                    user_message_id=user_message_id,
+                )
+                outcome = yield from self._stream_claude_supervised_response(
+                    request,
+                    chat_session,
+                    active_skill,
+                    tools,
+                    persona_prompt,
+                    conversation_context,
+                    user_message_id,
+                )
+                reply = outcome.reply
+                step_result = outcome.step_result
+                tool_result = outcome.tool_result
+                if mark_current_turn_cancelled():
+                    return
+                for chunk in self.response_generator.chunk_text(reply):
+                    yield self._stream_event(
+                        "stream_delta",
+                        chat_session,
+                        self._turn_payload({"content": chunk}, user_message_id),
+                    )
+                    self._pace_stream()
+                yield self._stream_event(
+                    "stream_end", chat_session, self._turn_payload({}, user_message_id)
+                )
+                if mark_current_turn_cancelled():
+                    return
+                finalize_turn_once(chat_session, reply, step_result, request.message)
+                self.db.commit()
+                self.db.refresh(chat_session)
+                result = ChatTurnResponse(
+                    reply=reply,
+                    session_id=chat_session.id,
+                    router_decision=router_decision,
+                    step_result=step_result,
+                    tool_result=tool_result,
+                    session_state=public_session(chat_session),
+                )
+                yield self._stream_event(
+                    "complete",
+                    chat_session,
+                    self._turn_payload(result.model_dump(mode="json"), user_message_id),
+                )
+                return
             if not self._should_run_step_agent(router_decision, active_skill):
                 knowledge_stream_events = []
                 auto_step_result = self._auto_knowledge_step_result(
@@ -2200,6 +2343,688 @@ class AgentLoop:
                 "AGENT_LOOP_ERROR",
                 "请查看执行记录或服务日志定位具体原因。",
             )
+
+    def _stream_claude_supervised_response(
+        self,
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        active_skill: Skill,
+        tools: list[Tool],
+        persona_prompt: str | None,
+        conversation_context: dict[str, object],
+        user_message_id: str,
+    ) -> Iterator[dict[str, object]]:
+        ui_config, model_config = self._claude_runtime_configuration(
+            request.tenant_id, active_skill.skill_id
+        )
+        try:
+            api_key = decrypt_secret(model_config.api_key_encrypted)
+        except Exception as exc:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_secret_error", "Claude Runtime 模型密钥无法解密。"
+            ) from exc
+        if not api_key:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_missing_key", "Claude Runtime 模型没有配置 API Key。"
+            )
+
+        runtime_state = dict(chat_session.runtime_state_json or {})
+        sdk_session_id = str(runtime_state.get("sdk_session_id") or "").strip() or None
+        max_repairs = max(0, min(int(ui_config.claude_max_repair_rounds), 5))
+        max_segments = max(1, min(self._get_agent_loop_max_actions(request.tenant_id), 20))
+        evidence = self._claude_evidence_ledger(chat_session)
+        latest_reply = ""
+        last_tool_result: ToolResult | None = None
+        total_model_calls = 0
+        total_sdk_turns = 0
+        approved_tools = set(
+            str(item) for item in runtime_state.get("approved_tool_names", []) if str(item)
+        )
+
+        for segment_index in range(max_segments):
+            active_step_id = str(chat_session.active_step_id or "").strip()
+            if not active_step_id:
+                raise AgentLoopPreconditionError(
+                    "claude_runtime_missing_step", "当前 SOP 没有可执行的活动步骤。"
+                )
+            current_step = self._current_skill_step(active_skill, active_step_id) or {}
+            expected_fields = {
+                str(item or "").strip()
+                for item in current_step.get("expected_user_info", [])
+            }
+            slots = dict(chat_session.slots_json or {})
+            if "confirmation" in expected_fields and not _slot_has_value(slots, "confirmation"):
+                if self._is_explicit_approval(request.message):
+                    slots["confirmation"] = True
+                elif self._is_explicit_rejection(request.message):
+                    slots["confirmation"] = False
+                if slots != (chat_session.slots_json or {}):
+                    chat_session.slots_json = slots
+                    self.db.add(chat_session)
+                    self.db.commit()
+            segment = self.sop_supervisor.compile_segment(
+                active_skill.content_json or {},
+                active_step_id,
+                chat_session.slots_json or {},
+                tools,
+            )
+            if not segment.node_ids or segment.boundary == "invalid_graph":
+                raise AgentLoopPreconditionError(
+                    "claude_runtime_invalid_graph", "当前 SOP 图无法编译为安全执行段。"
+                )
+
+            if (
+                segment.boundary == "human_confirmation"
+                and segment.node_ids == [active_step_id]
+            ):
+                runtime_state["status"] = "awaiting_confirmation"
+                chat_session.runtime_state_json = dict(runtime_state)
+                chat_session.awaiting_input_json = {
+                    "kind": "sop_confirmation",
+                    "skill_id": active_skill.skill_id,
+                    "step_id": active_step_id,
+                    "expected_fields": ["confirmation"],
+                    "question_summary": "请明确确认或拒绝后继续。",
+                    "turn_id": user_message_id,
+                }
+                self.db.add(chat_session)
+                self.db.commit()
+                return ClaudeSupervisedOutcome(
+                    reply="当前 SOP 到达人工确认检查点。请明确回复“确认执行”或“取消”。",
+                    step_result=StepAgentResult(
+                        action="ask_user",
+                        reply="等待用户确认。",
+                        is_step_completed=False,
+                    ),
+                )
+
+            if segment.boundary == "handoff" and segment.node_ids == [active_step_id]:
+                step_result = StepAgentResult(
+                    action="handoff",
+                    reply="当前 SOP 已进入人工处理节点。",
+                    handoff=True,
+                    is_step_completed=False,
+                )
+                handoff = self._create_human_handoff_request(
+                    request.tenant_id, chat_session, active_skill, step_result
+                )
+                runtime_state.update({"status": "handoff", "handoff_id": handoff.id})
+                chat_session.runtime_state_json = dict(runtime_state)
+                self.db.add(chat_session)
+                self.db.commit()
+                return ClaudeSupervisedOutcome(
+                    reply="该 SOP 已转入人工处理，Graph 保留在当前交接节点。",
+                    step_result=step_result,
+                )
+
+            if segment.requires_approval:
+                pending = runtime_state.get("pending_approval")
+                pending_tools = (
+                    [str(item) for item in pending.get("tool_names", [])]
+                    if isinstance(pending, dict)
+                    else []
+                )
+                if set(segment.allowed_tool_names).issubset(approved_tools):
+                    evidence.approvals.update(segment.allowed_tool_names)
+                elif pending_tools == segment.allowed_tool_names and self._is_explicit_approval(
+                    request.message
+                ):
+                    approved_tools.update(segment.allowed_tool_names)
+                    evidence.approvals.update(segment.allowed_tool_names)
+                    runtime_state.pop("pending_approval", None)
+                    chat_session.awaiting_input_json = None
+                elif pending_tools == segment.allowed_tool_names and self._is_explicit_rejection(
+                    request.message
+                ):
+                    runtime_state.pop("pending_approval", None)
+                    runtime_state["status"] = "side_effect_rejected"
+                    chat_session.runtime_state_json = dict(runtime_state)
+                    chat_session.awaiting_input_json = None
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "sop_side_effect_rejected",
+                        self._turn_payload(
+                            {"tool_names": segment.allowed_tool_names}, user_message_id
+                        ),
+                    )
+                    self.db.commit()
+                    return ClaudeSupervisedOutcome(
+                        reply="已取消本次有副作用的操作，SOP 保留在当前步骤。",
+                        step_result=StepAgentResult(
+                            action="reply", reply="已取消本次操作。", is_step_completed=False
+                        ),
+                    )
+                else:
+                    runtime_state["pending_approval"] = {
+                        "step_id": active_step_id,
+                        "tool_names": segment.allowed_tool_names,
+                        "effect_level": "side_effect",
+                    }
+                    runtime_state["status"] = "awaiting_approval"
+                    chat_session.runtime_state_json = dict(runtime_state)
+                    chat_session.awaiting_input_json = {
+                        "kind": "runtime_tool_approval",
+                        "skill_id": active_skill.skill_id,
+                        "step_id": active_step_id,
+                        "tool_names": segment.allowed_tool_names,
+                        "question_summary": "请确认是否执行有副作用的工具。",
+                        "turn_id": user_message_id,
+                    }
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "sop_approval_required",
+                        self._turn_payload(
+                            {
+                                "step_id": active_step_id,
+                                "tool_names": segment.allowed_tool_names,
+                            },
+                            user_message_id,
+                        ),
+                    )
+                    self.db.commit()
+                    tool_labels = "、".join(segment.allowed_tool_names)
+                    return ClaudeSupervisedOutcome(
+                        reply=(
+                            f"下一步将执行有副作用的工具：{tool_labels}。"
+                            "请明确回复“确认执行”或“取消”。"
+                        ),
+                        step_result=StepAgentResult(
+                            action="ask_user",
+                            reply="等待用户确认有副作用的操作。",
+                            is_step_completed=False,
+                        ),
+                    )
+
+            segment_tools = [
+                tool
+                for tool in tools
+                if tool.name in segment.allowed_tool_names and tool.enabled
+            ]
+            visible_kb_ids = visible_knowledge_base_ids(
+                self.db, request.tenant_id, chat_session.agent_id
+            )
+            harness_tools = [
+                HarnessTool(
+                    name=tool.name,
+                    description=tool.description or tool.display_name or tool.name,
+                    input_schema=tool.input_schema or {"type": "object"},
+                    effect_level=ToolEffectLevel(tool_effect_level(tool)),
+                )
+                for tool in segment_tools
+            ]
+            if visible_kb_ids:
+                harness_tools.append(
+                    HarnessTool(
+                        name="staffdeck.knowledge_search",
+                        description="检索当前数字员工可见的 StaffDeck 知识库。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                        effect_level=ToolEffectLevel.READ,
+                    )
+                )
+
+            tool_by_name = {tool.name: tool for tool in segment_tools}
+
+            def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+                nonlocal last_tool_result
+                if tool_name == "staffdeck.knowledge_search":
+                    if not visible_kb_ids:
+                        return {
+                            "tool_name": tool_name,
+                            "success": False,
+                            "error": {"code": "NOT_ALLOWED", "message": "没有可见知识库。"},
+                        }
+                    search_response = self.knowledge.search(
+                        KnowledgeSearchRequest(
+                            tenant_id=request.tenant_id,
+                            agent_id=chat_session.agent_id,
+                            query=str(arguments.get("query") or request.message),
+                            knowledge_base_ids=visible_kb_ids,
+                            max_chunks=6,
+                        )
+                    )
+                    payload = search_response.model_dump(mode="json")
+                    evidence.knowledge_refs.append(payload)
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "knowledge_result",
+                        self._turn_payload(payload, user_message_id),
+                    )
+                    self.db.commit()
+                    return {"tool_name": tool_name, "success": True, "data": payload}
+
+                tool = tool_by_name.get(tool_name)
+                if not tool:
+                    return {
+                        "tool_name": tool_name,
+                        "success": False,
+                        "error": {
+                            "code": "NOT_ALLOWED",
+                            "message": "工具不在当前 SOP 执行段的允许范围内。",
+                        },
+                    }
+                effect = tool_effect_level(tool)
+                if effect != ToolEffectLevel.READ.value and tool_name not in approved_tools:
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "sop_tool_denied",
+                        self._turn_payload(
+                            {"tool_name": tool_name, "reason": "approval_required"},
+                            user_message_id,
+                        ),
+                    )
+                    self.db.commit()
+                    return {
+                        "tool_name": tool_name,
+                        "success": False,
+                        "error": {
+                            "code": "APPROVAL_REQUIRED",
+                            "message": "StaffDeck 尚未批准这个有副作用的工具调用。",
+                        },
+                    }
+                tool_call = ToolCall(name=tool_name, arguments=arguments)
+                last_tool_result = self._execute_tool_call(
+                    request, chat_session, tool_call, stream_events=[]
+                )
+                self._record_tool_result_in_slots(chat_session, tool_call, last_tool_result)
+                evidence.record_tool_result(
+                    tool_name,
+                    arguments,
+                    last_tool_result.success,
+                    last_tool_result.data,
+                    last_tool_result.error.model_dump(mode="json")
+                    if last_tool_result.error
+                    else None,
+                )
+                self.db.add(chat_session)
+                self.db.commit()
+                return last_tool_result.model_dump(mode="json")
+
+            for repair_attempt in range(max_repairs + 1):
+                prompt = self._claude_segment_prompt(
+                    request,
+                    chat_session,
+                    active_skill,
+                    segment.model_dump(mode="json"),
+                    conversation_context,
+                    evidence,
+                    None,
+                )
+                if repair_attempt:
+                    previous_audit = runtime_state.get("last_audit")
+                    prompt = self._claude_segment_prompt(
+                        request,
+                        chat_session,
+                        active_skill,
+                        segment.model_dump(mode="json"),
+                        conversation_context,
+                        evidence,
+                        previous_audit if isinstance(previous_audit, dict) else None,
+                    )
+                    yield self._stream_status(
+                        chat_session,
+                        "sop_repair",
+                        f"StaffDeck 正在要求 Claude 修复 SOP（{repair_attempt}/{max_repairs}）",
+                        {"repair_attempt": repair_attempt},
+                        user_message_id=user_message_id,
+                    )
+
+                runtime_state.update(
+                    {
+                        "status": "running",
+                        "active_run_id": user_message_id,
+                        "active_segment": segment.model_dump(mode="json"),
+                        "sdk_session_id": sdk_session_id,
+                    }
+                )
+                chat_session.runtime_state_json = dict(runtime_state)
+                self.db.add(chat_session)
+                self.db.commit()
+
+                def event_sink(event_type: str, payload: dict[str, Any]) -> None:
+                    event_payload = self._turn_payload(
+                        {**payload, "segment_index": segment_index}, user_message_id
+                    )
+                    self.events.record(
+                        request.tenant_id, chat_session.id, event_type, event_payload
+                    )
+                    self.db.commit()
+
+                environment: dict[str, str] = {}
+                if model_config.base_url:
+                    environment["ANTHROPIC_BASE_URL"] = model_config.base_url
+                max_budget = (model_config.extra_body_json or {}).get("max_budget_usd")
+                run_request = HarnessRunRequest(
+                    run_id=user_message_id,
+                    model=model_config.model,
+                    api_key=api_key,
+                    prompt=prompt,
+                    system_prompt=self._claude_system_prompt(active_skill, persona_prompt),
+                    tools=harness_tools,
+                    execute_tool=execute_tool,
+                    event_sink=event_sink,
+                    max_turns=max(1, min(int(ui_config.agent_loop_max_actions) * 4, 40)),
+                    max_budget_usd=float(max_budget) if max_budget is not None else None,
+                    environment=environment,
+                )
+                runtime_call = (
+                    self.claude_runtime.resume(sdk_session_id, run_request)
+                    if sdk_session_id
+                    else self.claude_runtime.run_segment(run_request)
+                )
+                run_result = asyncio.run(runtime_call)
+                total_model_calls += 1
+                total_sdk_turns += run_result.num_turns
+                sdk_session_id = run_result.session_id or sdk_session_id
+                runtime_state["sdk_session_id"] = sdk_session_id
+                runtime_state["model_calls"] = total_model_calls
+                runtime_state["sdk_turns"] = total_sdk_turns
+                runtime_state.pop("active_run_id", None)
+                chat_session.runtime_state_json = dict(runtime_state)
+                self.db.add(chat_session)
+                self.db.commit()
+
+                if run_result.is_error:
+                    runtime_state.update(
+                        {
+                            "status": "failed",
+                            "error_code": run_result.error_code,
+                            "error_message": run_result.error_message,
+                        }
+                    )
+                    chat_session.runtime_state_json = dict(runtime_state)
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "harness_run_failed_closed",
+                        self._turn_payload(
+                            {
+                                "code": run_result.error_code,
+                                "message": run_result.error_message,
+                                "fallback": False,
+                            },
+                            user_message_id,
+                        ),
+                    )
+                    self.db.commit()
+                    return ClaudeSupervisedOutcome(
+                        reply=(
+                            "Claude Supervised Runtime 本次执行失败，系统未自动切换到旧 Runtime，"
+                            "以避免重复执行工具。请重试或转人工处理。"
+                        ),
+                        step_result=StepAgentResult(
+                            action="reply", reply=run_result.error_message, is_step_completed=False
+                        ),
+                        tool_result=last_tool_result,
+                    )
+
+                audit = self.sop_supervisor.audit(
+                    segment,
+                    active_skill.content_json or {},
+                    chat_session.slots_json or {},
+                    run_result.output,
+                    evidence,
+                    attempt=repair_attempt,
+                    max_repairs=max_repairs,
+                )
+                audit_payload = audit.model_dump(mode="json")
+                runtime_state["last_audit"] = audit_payload
+                self.events.record(
+                    request.tenant_id,
+                    chat_session.id,
+                    "sop_audit",
+                    self._turn_payload(audit_payload, user_message_id),
+                )
+                self.db.commit()
+
+                if audit.outcome == SopAuditOutcome.REPAIR:
+                    self.events.record(
+                        request.tenant_id,
+                        chat_session.id,
+                        "sop_repair_requested",
+                        self._turn_payload(
+                            audit.repair_contract.model_dump(mode="json")
+                            if audit.repair_contract
+                            else audit_payload,
+                            user_message_id,
+                        ),
+                    )
+                    self.db.commit()
+                    continue
+                if audit.outcome == SopAuditOutcome.BLOCKED:
+                    runtime_state["status"] = "awaiting_user_input"
+                    chat_session.runtime_state_json = dict(runtime_state)
+                    chat_session.awaiting_input_json = {
+                        "kind": "claude_sop_input",
+                        "skill_id": active_skill.skill_id,
+                        "step_id": active_step_id,
+                        "expected_fields": [
+                            item.removeprefix("slot:")
+                            for item in audit.missing_evidence
+                            if item.startswith("slot:")
+                        ],
+                        "question_summary": run_result.output.user_question
+                        or "需要补充信息后继续 SOP。",
+                        "turn_id": user_message_id,
+                    }
+                    self.db.commit()
+                    return ClaudeSupervisedOutcome(
+                        reply=run_result.output.user_question or "请补充完成当前 SOP 步骤所需的信息。",
+                        step_result=StepAgentResult(
+                            action="ask_user",
+                            reply=run_result.output.user_question,
+                            is_step_completed=False,
+                        ),
+                        tool_result=last_tool_result,
+                    )
+                if audit.outcome != SopAuditOutcome.PASSED:
+                    runtime_state["status"] = "failed"
+                    chat_session.runtime_state_json = dict(runtime_state)
+                    self.db.commit()
+                    return ClaudeSupervisedOutcome(
+                        reply=(
+                            "Claude 未能在监督轮次内补齐 SOP 证据，Graph 未推进。"
+                            "请重试或转人工处理。"
+                        ),
+                        step_result=StepAgentResult(
+                            action="reply", reply=run_result.output.reply, is_step_completed=False
+                        ),
+                        tool_result=last_tool_result,
+                    )
+
+                slots = dict(chat_session.slots_json or {})
+                slots.update(audit.accepted_slot_updates)
+                chat_session.slots_json = slots
+                chat_session.awaiting_input_json = None
+                latest_reply = run_result.output.reply or latest_reply
+                checkpoints = list(runtime_state.get("checkpoints", []))
+                checkpoints.append(
+                    {
+                        "segment_index": segment_index,
+                        "node_ids": segment.node_ids,
+                        "completed_step_ids": audit.completed_step_ids,
+                        "sdk_session_id": sdk_session_id,
+                    }
+                )
+                runtime_state["checkpoints"] = checkpoints[-50:]
+                runtime_state["status"] = "checkpointed"
+                runtime_state.pop("last_audit", None)
+                chat_session.runtime_state_json = dict(runtime_state)
+                for tool_name in segment.allowed_tool_names:
+                    approved_tools.discard(tool_name)
+                    evidence.approvals.discard(tool_name)
+                break
+            else:
+                return ClaudeSupervisedOutcome(
+                    reply="SOP 修复轮次已耗尽，Graph 未推进。请重试或转人工处理。",
+                    step_result=StepAgentResult(action="reply", is_step_completed=False),
+                    tool_result=last_tool_result,
+                )
+
+            next_step_id = audit.next_step_id
+            if next_step_id:
+                self._change_active_step(
+                    request.tenant_id,
+                    chat_session,
+                    next_step_id,
+                    reason="claude_supervisor_reconciled",
+                )
+                self.db.add(chat_session)
+                self.db.commit()
+                continue
+
+            terminal_ids = {
+                str(item) for item in (active_skill.content_json or {}).get("terminal_node_ids", [])
+            }
+            if audit.active_step_id in terminal_ids:
+                self._complete_active_skill(
+                    request.tenant_id,
+                    chat_session,
+                    active_skill,
+                    "claude_supervisor_evidence_passed",
+                )
+                runtime_state["status"] = "completed"
+                chat_session.runtime_state_json = dict(runtime_state)
+                self.db.add(chat_session)
+                self.db.commit()
+            return ClaudeSupervisedOutcome(
+                reply=latest_reply or "SOP 已完成。",
+                step_result=StepAgentResult(
+                    action="reply",
+                    reply=latest_reply or "SOP 已完成。",
+                    slot_updates=audit.accepted_slot_updates,
+                    is_step_completed=True,
+                ),
+                tool_result=last_tool_result,
+            )
+
+        runtime_state["status"] = "checkpoint_limit"
+        chat_session.runtime_state_json = dict(runtime_state)
+        self.db.add(chat_session)
+        self.db.commit()
+        return ClaudeSupervisedOutcome(
+            reply=latest_reply or "本轮已到达安全检查点，将在下一轮继续。",
+            step_result=StepAgentResult(
+                action="reply", reply=latest_reply, is_step_completed=False
+            ),
+            tool_result=last_tool_result,
+        )
+
+    def _is_claude_supervised_session(self, chat_session: ChatSession) -> bool:
+        return (chat_session.runtime_mode or "legacy") == "claude_supervised"
+
+    def _claude_runtime_configuration(
+        self, tenant_id: str, skill_id: str
+    ) -> tuple[UIConfig, ModelConfig]:
+        ui_config = self.db.get(UIConfig, tenant_id)
+        if not ui_config or not ui_config.claude_runtime_enabled:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_disabled", "Claude Supervised Runtime 尚未由管理员启用。"
+            )
+        allowlist = {
+            str(item) for item in (ui_config.claude_skill_allowlist_json or []) if str(item)
+        }
+        if skill_id not in allowlist:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_skill_not_allowed", "当前 SOP 不在 Claude Runtime 白名单中。"
+            )
+        model_id = str(ui_config.claude_model_config_id or "").strip()
+        model_config = self.db.get(ModelConfig, model_id) if model_id else None
+        if (
+            not model_config
+            or model_config.tenant_id != tenant_id
+            or not model_config.enabled
+            or model_config.provider != "claude_agent_sdk"
+        ):
+            raise AgentLoopPreconditionError(
+                "claude_runtime_invalid_model",
+                "Claude Runtime 必须绑定已启用的 claude_agent_sdk 模型配置。",
+            )
+        return ui_config, model_config
+
+    def _claude_evidence_ledger(self, chat_session: ChatSession) -> EvidenceLedger:
+        ledger = EvidenceLedger()
+        results = (chat_session.slots_json or {}).get(TOOL_RESULTS_SLOT)
+        if isinstance(results, list):
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                ledger.record_tool_result(
+                    str(item.get("tool_name") or ""),
+                    item.get("arguments") if isinstance(item.get("arguments"), dict) else {},
+                    item.get("success") is True,
+                    item.get("data"),
+                    item.get("error"),
+                )
+        return ledger
+
+    def _claude_system_prompt(self, active_skill: Skill, persona_prompt: str | None) -> str:
+        persona = (persona_prompt or "").strip()
+        return "\n".join(
+            item
+            for item in [
+                persona,
+                "你在 StaffDeck 的 Claude Supervised Runtime 中工作。",
+                f"当前 SOP：{active_skill.name}（{active_skill.skill_id}）。",
+                "你可以在当前执行段内自主循环、检索知识并调用已提供工具。",
+                "StaffDeck 是步骤、权限和完成状态的唯一权威；不得声称未实际发生的工具调用。",
+                "不得自行标记 Graph 步骤完成，也不得把 next_step_id 当作权威状态。",
+                "只返回约定的结构化输出；reply 是审计通过后才会展示给用户的候选回答。",
+            ]
+            if item
+        )
+
+    def _claude_segment_prompt(
+        self,
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        active_skill: Skill,
+        segment: dict[str, Any],
+        conversation_context: dict[str, object],
+        evidence: EvidenceLedger,
+        repair_contract: dict[str, Any] | None,
+    ) -> str:
+        payload = {
+            "task": "执行当前 StaffDeck SOP 执行段并返回结构化结果",
+            "user_message": request.message,
+            "skill": {
+                "skill_id": active_skill.skill_id,
+                "name": active_skill.name,
+                "goal": (active_skill.content_json or {}).get("goal", []),
+                "required_info": (active_skill.content_json or {}).get("required_info", []),
+            },
+            "segment": segment,
+            "current_slots": chat_session.slots_json or {},
+            "recent_conversation": conversation_context,
+            "objective_evidence": {
+                "tool_results": evidence.tool_results[-20:],
+                "knowledge_refs": evidence.knowledge_refs[-10:],
+                "approvals": sorted(evidence.approvals),
+            },
+            "repair_contract": repair_contract,
+            "rules": [
+                "只调用当前可见工具。",
+                "需要用户补充信息时设置 needs_user_input=true 并给出 user_question。",
+                "slot_updates 只是候选值，StaffDeck 会验证后提交。",
+                "不要伪造 evidence_refs、工具结果或步骤完成状态。",
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def _is_explicit_approval(self, message: str) -> bool:
+        normalized = re.sub(r"[\s，。！？、,.!?]", "", message or "").lower()
+        return normalized in {"确认", "确认执行", "同意", "同意执行", "可以执行"}
+
+    def _is_explicit_rejection(self, message: str) -> bool:
+        normalized = re.sub(r"[\s，。！？、,.!?]", "", message or "").lower()
+        return normalized in {"取消", "拒绝", "不同意", "不要执行", "停止"}
 
     def _stream_status(
         self,
@@ -5842,6 +6667,7 @@ class AgentLoop:
                 tenant_id=request.tenant_id,
                 user_id=request.user_id,
                 agent_id=request.agent_id,
+                runtime_mode=request.runtime_mode or "legacy",
             )
             self.db.add(chat_session)
             self.db.flush()

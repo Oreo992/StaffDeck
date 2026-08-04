@@ -12,7 +12,7 @@ import {
   notify,
 } from '@/components/ui';
 import { api, TENANT_ID } from '../api/client';
-import type { AgentProfileRead, PersonaRead, UIConfigRead } from '../types';
+import type { AgentProfileRead, ModelConfigRead, PersonaRead, UIConfigRead } from '../types';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
 
@@ -28,6 +28,10 @@ type UiConfigForm = {
   show_tool_trace: boolean;
   reflection_max_rounds: string;
   agent_loop_max_actions: string;
+  claude_runtime_enabled: boolean;
+  claude_model_config_id: string;
+  claude_skill_allowlist: string;
+  claude_max_repair_rounds: string;
 };
 
 const BLANK_PERSONA: PersonaForm = { agent_name: '', agent_description: '', system_prompt: '' };
@@ -37,6 +41,10 @@ const DEFAULT_UI_CONFIG: UiConfigForm = {
   show_tool_trace: true,
   reflection_max_rounds: '1',
   agent_loop_max_actions: '6',
+  claude_runtime_enabled: false,
+  claude_model_config_id: '',
+  claude_skill_allowlist: '',
+  claude_max_repair_rounds: '2',
 };
 
 function formatDateOnly(value: string): string {
@@ -56,6 +64,7 @@ export default function PersonaPage() {
   const [updatedAt, setUpdatedAt] = useState('');
   const [uiUpdatedAt, setUiUpdatedAt] = useState('');
   const [agents, setAgents] = useState<AgentProfileRead[]>([]);
+  const [modelConfigs, setModelConfigs] = useState<ModelConfigRead[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState(() => window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || '');
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
   const isOverallPersona = !selectedAgent || selectedAgent.is_overall;
@@ -74,9 +83,17 @@ export default function PersonaPage() {
           show_tool_trace: row.show_tool_trace,
           reflection_max_rounds: String(row.reflection_max_rounds),
           agent_loop_max_actions: String(row.agent_loop_max_actions),
+          claude_runtime_enabled: row.claude_runtime_enabled,
+          claude_model_config_id: row.claude_model_config_id || '',
+          claude_skill_allowlist: row.claude_skill_allowlist.join('\n'),
+          claude_max_repair_rounds: String(row.claude_max_repair_rounds),
         });
         setUiUpdatedAt(row.updated_at);
       })
+      .catch((error) => notify.error(error.message));
+    api
+      .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
+      .then(setModelConfigs)
       .catch((error) => notify.error(error.message));
   }, []);
 
@@ -181,8 +198,24 @@ export default function PersonaPage() {
   async function saveUiConfig() {
     const reflectionMaxRounds = Number(uiForm.reflection_max_rounds);
     const agentLoopMaxActions = Number(uiForm.agent_loop_max_actions);
-    if (Number.isNaN(reflectionMaxRounds) || Number.isNaN(agentLoopMaxActions)) {
-      notify.error('反思轮数与单轮最大动作数必须是数字');
+    const claudeMaxRepairRounds = Number(uiForm.claude_max_repair_rounds);
+    const claudeSkillAllowlist = uiForm.claude_skill_allowlist
+      .split(/[\n,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      Number.isNaN(reflectionMaxRounds)
+      || Number.isNaN(agentLoopMaxActions)
+      || Number.isNaN(claudeMaxRepairRounds)
+    ) {
+      notify.error('执行轮数设置必须是数字');
+      return;
+    }
+    if (
+      uiForm.claude_runtime_enabled
+      && (!uiForm.claude_model_config_id || claudeSkillAllowlist.length === 0)
+    ) {
+      notify.error('启用 Claude Runtime 前请选择 Claude SDK 模型并填写 SOP Skill ID 白名单');
       return;
     }
     setUiLoading(true);
@@ -194,6 +227,10 @@ export default function PersonaPage() {
         show_tool_trace: uiForm.show_tool_trace,
         reflection_max_rounds: reflectionMaxRounds,
         agent_loop_max_actions: agentLoopMaxActions,
+        claude_runtime_enabled: uiForm.claude_runtime_enabled,
+        claude_model_config_id: uiForm.claude_model_config_id || null,
+        claude_skill_allowlist: claudeSkillAllowlist,
+        claude_max_repair_rounds: claudeMaxRepairRounds,
       });
       setUiUpdatedAt(row.updated_at);
       notify.success('展示设置已保存');
@@ -264,6 +301,50 @@ export default function PersonaPage() {
               step={1}
               value={uiForm.agent_loop_max_actions}
               onChange={(event) => updateUiConfig({ agent_loop_max_actions: event.target.value })}
+            />
+          </LabeledField>
+          <div className="my-[2px] h-px bg-border" />
+          <SwitchRow
+            label="启用 Claude Supervised Runtime"
+            checked={uiForm.claude_runtime_enabled}
+            onChange={(next) => updateUiConfig({ claude_runtime_enabled: next })}
+          />
+          <LabeledField
+            label="Claude SDK 模型"
+            hint="只显示 Provider 为 claude_agent_sdk 且已启用的模型配置。"
+          >
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              value={uiForm.claude_model_config_id}
+              onChange={(event) => updateUiConfig({ claude_model_config_id: event.target.value })}
+            >
+              <option value="">请选择 Claude SDK 模型</option>
+              {modelConfigs
+                .filter((model) => model.enabled && model.provider === 'claude_agent_sdk')
+                .map((model) => (
+                  <option key={model.id} value={model.id}>{model.name} · {model.model}</option>
+                ))}
+            </select>
+          </LabeledField>
+          <LabeledField
+            label="SOP Skill ID 白名单"
+            hint="每行或逗号分隔一个 Skill ID；白名单之外的新 Runtime 会失败关闭。"
+          >
+            <Textarea
+              rows={4}
+              value={uiForm.claude_skill_allowlist}
+              placeholder={'graph_demo\nproduct_price_query'}
+              onChange={(event) => updateUiConfig({ claude_skill_allowlist: event.target.value })}
+            />
+          </LabeledField>
+          <LabeledField label="SOP 最大修复轮数" hint="审计发现跳步或缺少证据时，允许恢复同一 Claude 会话修复。">
+            <Input
+              type="number"
+              min={0}
+              max={5}
+              step={1}
+              value={uiForm.claude_max_repair_rounds}
+              onChange={(event) => updateUiConfig({ claude_max_repair_rounds: event.target.value })}
             />
           </LabeledField>
           <UIButton className="self-start" disabled={uiLoading} onClick={() => void saveUiConfig()}>

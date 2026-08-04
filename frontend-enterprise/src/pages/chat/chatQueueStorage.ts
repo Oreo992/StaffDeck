@@ -16,6 +16,7 @@ export type PreparedChatTurn = {
   attachments: ChatAttachmentRead[];
   interactionMode: ComposerInteractionMode;
   modelConfigId?: string;
+  runtimeMode?: 'legacy' | 'claude_supervised';
   createdAt: string;
 };
 
@@ -47,6 +48,11 @@ function isPreparedChatTurn(value: unknown): value is PreparedChatTurn {
     && typeof value.interactionMode === 'string'
     && INTERACTION_MODES.has(value.interactionMode as ComposerInteractionMode)
     && (value.modelConfigId === undefined || typeof value.modelConfigId === 'string')
+    && (
+      value.runtimeMode === undefined
+      || value.runtimeMode === 'legacy'
+      || value.runtimeMode === 'claude_supervised'
+    )
     && typeof value.createdAt === 'string'
     && Number.isFinite(Date.parse(value.createdAt))
   );

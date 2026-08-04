@@ -72,6 +72,10 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     enabledModelConfigs,
     selectedModelConfig,
     changeModelConfig,
+    effectiveRuntimeMode,
+    runtimeModeLocked,
+    canUseClaudeRuntime,
+    changeRuntimeMode,
     showModelSetupNotice,
     modelSetupNoticeText,
     canConfigureModels,
@@ -354,6 +358,47 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
               <div className={CHAT_COMPOSER_HINT_CLASS}>Enter 发送 / Shift+Enter 换行</div>
             </div>
             <div className={CHAT_COMPOSER_ACTIONS_ROW_CLASS}>
+              {(canUseClaudeRuntime || effectiveRuntimeMode === 'claude_supervised') && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className={CHAT_COMPOSER_MODEL_BTN_CLASS}
+                      disabled={runtimeModeLocked}
+                      title={runtimeModeLocked ? 'Runtime 已按会话锁定；新建任务后可切换' : '选择执行 Runtime'}
+                    >
+                      <span>{effectiveRuntimeMode === 'claude_supervised' ? 'Claude 监督' : 'Legacy'}</span>
+                      {!runtimeModeLocked && (
+                        <StaffdeckIcon name="arrow" size={14} style={{ transform: 'rotate(90deg)' }} />
+                      )}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" side="top" className={cn(CHAT_MENU_CONTENT_CLASS, 'min-w-[220px]')}>
+                    <DropdownMenuItem
+                      className={CHAT_MODEL_MENU_ITEM_CLASS}
+                      onSelect={() => changeRuntimeMode('legacy')}
+                    >
+                      <span className={CHAT_MODEL_MENU_COPY_CLASS}>
+                        <span className={CHAT_MODEL_MENU_NAME_CLASS}>Legacy Runtime</span>
+                        <span className={CHAT_MODEL_MENU_DETAIL_CLASS}>现有 StepAgent 执行链</span>
+                      </span>
+                      {effectiveRuntimeMode === 'legacy' && <StaffdeckIcon name="check" size={15} />}
+                    </DropdownMenuItem>
+                    {canUseClaudeRuntime && (
+                      <DropdownMenuItem
+                        className={CHAT_MODEL_MENU_ITEM_CLASS}
+                        onSelect={() => changeRuntimeMode('claude_supervised')}
+                      >
+                        <span className={CHAT_MODEL_MENU_COPY_CLASS}>
+                          <span className={CHAT_MODEL_MENU_NAME_CLASS}>Claude Supervised</span>
+                          <span className={CHAT_MODEL_MENU_DETAIL_CLASS}>Claude 自主循环 + StaffDeck SOP 审计</span>
+                        </span>
+                        {effectiveRuntimeMode === 'claude_supervised' && <StaffdeckIcon name="check" size={15} />}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button

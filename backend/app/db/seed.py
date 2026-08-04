@@ -339,7 +339,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "node_id": "intake_request",
             "type": "collect_info",
             "name": "识别验证请求",
-            "instruction": "识别用户想验证的是工具路径、知识路径、直接确认路径还是人工路径；若用户已说明目标，写入 request_type 并推进。",
+            "instruction": "识别用户想验证的是工具路径、知识路径、直接确认路径还是人工路径；将 request_type 规范为 tool、knowledge、confirm 或 human 后推进。",
             "expected_user_info": ["request_type"],
             "allowed_actions": ["ask_user", "continue_flow"],
         },
@@ -400,6 +400,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "intake_request",
             "next_node_id": "classify_path",
             "condition": "request_type 已识别",
+            "predicate_json": {"slot": "request_type", "op": "exists"},
             "priority": 0,
             "label": "进入分支判断",
         },
@@ -407,6 +408,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "classify_path",
             "next_node_id": "query_product_price",
             "condition": "需要外部商品数据",
+            "predicate_json": {"slot": "request_type", "op": "eq", "value": "tool"},
             "priority": 0,
             "label": "工具路径",
         },
@@ -414,6 +416,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "classify_path",
             "next_node_id": "read_policy_knowledge",
             "condition": "需要知识依据",
+            "predicate_json": {"slot": "request_type", "op": "eq", "value": "knowledge"},
             "priority": 1,
             "label": "知识路径",
         },
@@ -421,6 +424,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "classify_path",
             "next_node_id": "confirm_action",
             "condition": "信息充分但需要确认",
+            "predicate_json": {"slot": "request_type", "op": "eq", "value": "confirm"},
             "priority": 2,
             "label": "确认路径",
         },
@@ -428,6 +432,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "classify_path",
             "next_node_id": "handoff_manual",
             "condition": "用户要求人工或无法判断",
+            "predicate_json": {"slot": "request_type", "op": "eq", "value": "human"},
             "priority": 3,
             "label": "人工路径",
         },
@@ -435,6 +440,7 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "query_product_price",
             "next_node_id": "confirm_action",
             "condition": "工具结果可用",
+            "predicate_json": {"slot": "_tool_results", "op": "exists"},
             "priority": 0,
             "label": "核验后确认",
         },
@@ -456,6 +462,11 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "confirm_action",
             "next_node_id": "reply_result",
             "condition": "用户确认或可跳过确认",
+            "predicate_json": {
+                "slot": "confirmation",
+                "op": "in",
+                "value": [True, "yes", "confirmed", "确认"],
+            },
             "priority": 0,
             "label": "完成确认",
         },
@@ -463,6 +474,11 @@ GRAPH_VISUAL_DEMO_SKILL = {
             "source_node_id": "confirm_action",
             "next_node_id": "handoff_manual",
             "condition": "用户拒绝或需要人工",
+            "predicate_json": {
+                "slot": "confirmation",
+                "op": "in",
+                "value": [False, "no", "rejected", "拒绝"],
+            },
             "priority": 1,
             "label": "确认失败",
         },
@@ -627,6 +643,7 @@ PRODUCT_PRICE_QUERY_TOOL = {
     "description": "根据商品名称查询商品价格、品牌、规格和更新时间，用于商品比价。",
     "bucket": "商品工具",
     "method": "POST",
+    "effect_level": "read",
     "url": "/api/mock/product/price-query",
     "headers_json": {},
     "auth_json": {},
@@ -927,6 +944,7 @@ def seed_demo_data(session: Session) -> None:
             tool.config_json = tool_config.get("config_json") or tool.config_json
             tool.input_schema = tool_config.get("input_schema") or tool.input_schema
             tool.output_schema = tool_config.get("output_schema") or tool.output_schema
+            tool.effect_level = tool_config.get("effect_level") or tool.effect_level
             configured_skills = [
                 str(skill_id)
                 for skill_id in (tool_config.get("allowed_skills_json") or [])

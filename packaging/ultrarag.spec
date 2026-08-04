@@ -27,11 +27,12 @@ datas = [
     (str(BACKEND / "app" / "llm" / "prompts"), "app/llm/prompts"),
     (str(BACKEND / "app" / "db" / "seed_fixtures"), "app/db/seed_fixtures"),
     (str(BACKEND / "mock_servers"), "mock_servers"),
-] + collect_data_files("tzdata")
+] + collect_data_files("tzdata") + collect_data_files("claude_agent_sdk")
 
 hiddenimports = (
     collect_submodules("uvicorn")
     + collect_submodules("sqlmodel")
+    + collect_submodules("claude_agent_sdk")
     + collect_submodules("app")
     + [
         # 顶层单文件模块：uvicorn 用字符串 "single_port_app:app" 运行时动态 import

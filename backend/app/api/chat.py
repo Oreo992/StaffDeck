@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 from app.agents.branching import model_for_agent
 from app.core import AgentLoop
 from app.core.cancellation import cancel_chat_turn
+from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
 from app.db import engine, get_session
 from app.db.models import (
     AgentEvent,
@@ -167,6 +168,7 @@ def session_read(row: ChatSession, *, is_scheduled: bool = False) -> ChatSession
         summary=row.summary,
         last_agent_question=row.last_agent_question,
         is_scheduled=is_scheduled,
+        runtime_mode=row.runtime_mode or "legacy",
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -1284,6 +1286,10 @@ def cancel_chat_turn_endpoint(
     _ensure_request_tenant(request.tenant_id, current_user)
     chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, session_id)
     cancel_chat_turn(session_id, request.turn_id)
+    ClaudeAgentSdkAdapter().cancel(request.turn_id)
+    active_run_id = str((chat_session.runtime_state_json or {}).get("active_run_id") or "")
+    if active_run_id and active_run_id != request.turn_id:
+        ClaudeAgentSdkAdapter().cancel(active_run_id)
     _persist_chat_turn_cancelled(db, request.tenant_id, chat_session, request.turn_id, current_user.id)
     db.commit()
     return {"ok": True}
@@ -1717,6 +1723,7 @@ def create_chat_session(
         user_id=current_user.id,
         agent_id=request.agent_id,
         title=title,
+        runtime_mode=request.runtime_mode,
     )
     db.add(row)
     db.commit()
@@ -2155,6 +2162,10 @@ def _bind_request_to_session_agent(
     chat_session: ChatSession,
     current_user: User,
 ) -> ChatTurnRequest:
+    session_runtime = chat_session.runtime_mode or "legacy"
+    if request.runtime_mode and request.runtime_mode != session_runtime:
+        raise HTTPException(status_code=409, detail="Session is already bound to another runtime")
+    request = request.model_copy(update={"runtime_mode": session_runtime})
     if chat_session.agent_id:
         if request.agent_id and request.agent_id != chat_session.agent_id:
             raise HTTPException(status_code=409, detail="Session is already bound to another agent")

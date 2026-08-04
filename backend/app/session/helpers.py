@@ -20,4 +20,5 @@ def public_session(session: ChatSession) -> SessionPublic:
         summary=session.summary,
         last_agent_question=session.last_agent_question,
         status=session.status,
+        runtime_mode=session.runtime_mode or "legacy",
     )

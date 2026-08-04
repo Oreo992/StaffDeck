@@ -320,6 +320,10 @@ export type UIConfigRead = {
   show_tool_trace: boolean;
   reflection_max_rounds: number;
   agent_loop_max_actions: number;
+  claude_runtime_enabled: boolean;
+  claude_model_config_id?: string | null;
+  claude_skill_allowlist: string[];
+  claude_max_repair_rounds: number;
   updated_at: string;
 };
 
@@ -354,6 +358,7 @@ export type ToolRead = {
   output_schema: Record<string, unknown>;
   allowed_skills: string[];
   mcp_server_id?: string | null;
+  effect_level?: 'read' | 'write' | 'destructive' | null;
   enabled: boolean;
   metadata?: Record<string, unknown>;
   created_at: string;
@@ -483,6 +488,7 @@ export type ChatSession = {
   summary?: string;
   last_agent_question?: string;
   is_scheduled?: boolean;
+  runtime_mode?: 'legacy' | 'claude_supervised';
   updated_at: string;
 };
 

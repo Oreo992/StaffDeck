@@ -77,6 +77,7 @@ def tool_read(row: Tool, metadata: dict[str, Any] | None = None) -> ToolRead:
         output_schema=row.output_schema or {},
         allowed_skills=row.allowed_skills_json or [],
         mcp_server_id=row.mcp_server_id,
+        effect_level=row.effect_level,
         enabled=row.enabled,
         metadata=dict(metadata or {}),
         created_at=row.created_at.isoformat(),
@@ -153,6 +154,7 @@ def create_tool(
         input_schema=request.input_schema,
         output_schema=request.output_schema,
         allowed_skills_json=request.allowed_skills,
+        effect_level=request.effect_level,
         enabled=request.enabled,
     )
     db.add(row)
@@ -306,6 +308,7 @@ def update_tool(
     row.input_schema = request.input_schema
     row.output_schema = request.output_schema
     row.allowed_skills_json = request.allowed_skills
+    row.effect_level = request.effect_level
     row.enabled = request.enabled
     row.updated_at = utc_now()
     db.add(row)

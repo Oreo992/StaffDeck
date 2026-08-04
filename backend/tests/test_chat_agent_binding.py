@@ -65,6 +65,40 @@ def test_existing_chat_session_cannot_switch_agent() -> None:
         assert db.get(ChatSession, session.id).agent_id == "agent_a"
 
 
+def test_existing_chat_session_cannot_switch_runtime() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        current_user = User(
+            id="user_demo", tenant_id="tenant_demo", username="demo", password_hash="x"
+        )
+        db.add(current_user)
+        db.add(AgentProfile(id="agent_a", tenant_id="tenant_demo", name="客服 A"))
+        session = ChatSession(
+            id="session_bound",
+            tenant_id="tenant_demo",
+            user_id="user_demo",
+            agent_id="agent_a",
+            runtime_mode="legacy",
+        )
+        db.add(session)
+        db.commit()
+
+        request = ChatTurnRequest(
+            tenant_id="tenant_demo",
+            session_id=session.id,
+            user_id="user_demo",
+            agent_id="agent_a",
+            runtime_mode="claude_supervised",
+            message="你好",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _bind_request_to_session_agent(db, request, session, current_user)
+
+        assert exc_info.value.status_code == 409
+        assert db.get(ChatSession, session.id).runtime_mode == "legacy"
+
+
 def test_chat_agent_must_be_active_non_overall_agent() -> None:
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -141,6 +175,37 @@ def test_create_chat_session_always_creates_new_agent_session() -> None:
         assert first.id != "session_existing"
         assert second.id not in {"session_existing", first.id}
         assert len(session_rows) == 3
+
+
+def test_create_chat_session_persists_selected_runtime() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        current_user = User(
+            id="user_demo", tenant_id="tenant_demo", username="demo", password_hash="x"
+        )
+        db.add(current_user)
+        db.add(
+            AgentProfile(
+                id="agent_demo",
+                tenant_id="tenant_demo",
+                name="研发",
+                metadata_json={"owner_user_id": "user_demo"},
+            )
+        )
+        db.commit()
+
+        created = create_chat_session(
+            ChatSessionCreateRequest(
+                tenant_id="tenant_demo",
+                agent_id="agent_demo",
+                runtime_mode="claude_supervised",
+            ),
+            current_user=current_user,
+            db=db,
+        )
+
+        assert created.runtime_mode == "claude_supervised"
+        assert db.get(ChatSession, created.id).runtime_mode == "claude_supervised"
 
 
 def test_chat_session_list_exposes_scheduled_origin_without_title_inference() -> None:
