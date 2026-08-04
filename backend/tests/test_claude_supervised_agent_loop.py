@@ -522,8 +522,15 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         assert complete["data"]["reply"] == "普通对话回复 1"
         assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
         assert [tool.name for tool in harness.requests[0].tools] == [
-            "staffdeck.activate_sop"
+            "product.price_query",
+            "staffdeck.activate_sop",
         ]
+        execute_tool = harness.requests[0].execute_tool
+        assert execute_tool is not None
+        denied = execute_tool("product.price_query", {"product_name": "A1"})
+        assert isinstance(denied, dict)
+        assert denied["success"] is False
+        assert denied["error"]["code"] == "SOP_ACTIVATION_REQUIRED"
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert not any(

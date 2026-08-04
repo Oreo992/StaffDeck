@@ -2980,9 +2980,7 @@ class AgentLoop:
         read_tools = [
             tool
             for tool in tools
-            if not suggested_sop_id
-            and tool.enabled
-            and tool_effect_level(tool) == ToolEffectLevel.READ.value
+            if tool.enabled and tool_effect_level(tool) == ToolEffectLevel.READ.value
         ]
         visible_kb_ids = visible_knowledge_base_ids(
             self.db, request.tenant_id, chat_session.agent_id
@@ -3073,6 +3071,29 @@ class AgentLoop:
                     "tool_name": tool_name,
                     "success": False,
                     "error": {"code": "NOT_ALLOWED", "message": "工具不可用。"},
+                }
+            if suggested_sop_id:
+                self.events.record(
+                    request.tenant_id,
+                    chat_session.id,
+                    "claude_tool_denied",
+                    self._turn_payload(
+                        {
+                            "tool_name": tool_name,
+                            "reason": "sop_activation_required",
+                            "suggested_sop_id": suggested_sop_id,
+                        },
+                        user_message_id,
+                    ),
+                )
+                self.db.commit()
+                return {
+                    "tool_name": tool_name,
+                    "success": False,
+                    "error": {
+                        "code": "SOP_ACTIVATION_REQUIRED",
+                        "message": "请先调用 staffdeck.activate_sop 进入建议的 SOP。",
+                    },
                 }
             result = self._execute_tool_call(
                 request,
