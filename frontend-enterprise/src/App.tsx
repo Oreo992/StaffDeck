@@ -47,6 +47,7 @@ import KnowledgeManagePage, { KnowledgeAddPage } from "./pages/KnowledgePage";
 import LoginPage from "./pages/LoginPage";
 import ModelsPage from "./pages/ModelsPage";
 import OpenPlatformPage from "./pages/OpenPlatformPage";
+import PersonaPage from "./pages/PersonaPage";
 import SkillsPage from "./pages/SkillsPage";
 import {
   ScheduledTaskEditPage,
@@ -725,7 +726,7 @@ function Shell({
               />
               <Route
                 path="/enterprise/persona"
-                element={<Navigate to="/enterprise/dashboard" replace />}
+                element={<PersonaPage isAdmin={isAdmin} />}
               />
               <Route
                 path="*"

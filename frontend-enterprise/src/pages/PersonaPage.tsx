@@ -56,7 +56,7 @@ function formatDateOnly(value: string): string {
   return date.toISOString().slice(0, 10);
 }
 
-export default function PersonaPage() {
+export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [form, setForm] = useState<PersonaForm>(BLANK_PERSONA);
   const [uiForm, setUiForm] = useState<UiConfigForm>(DEFAULT_UI_CONFIG);
   const [loading, setLoading] = useState(false);
@@ -91,11 +91,13 @@ export default function PersonaPage() {
         setUiUpdatedAt(row.updated_at);
       })
       .catch((error) => notify.error(error.message));
-    api
-      .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
-      .then(setModelConfigs)
-      .catch((error) => notify.error(error.message));
-  }, []);
+    if (isAdmin) {
+      api
+        .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
+        .then(setModelConfigs)
+        .catch((error) => notify.error(error.message));
+    }
+  }, [isAdmin]);
 
   useEffect(() => {
     const onScopeChange = (event: Event) => {
@@ -245,7 +247,10 @@ export default function PersonaPage() {
     <>
       <div className="page-title">
         <div>
-          <h3>岗位人设</h3>
+          <h3>人设与运行时</h3>
+          <p className="m-0 mt-[4px] text-[12px] text-muted-foreground">
+            当前员工：{selectedAgent?.name || '组织默认员工'}。人设按员工保存；Runtime 配置由管理员全局管理。
+          </p>
         </div>
         <UIButton disabled={loading} onClick={() => void save()}>
           <SaveOutlined />
@@ -275,9 +280,9 @@ export default function PersonaPage() {
           {updatedAt && <span className="text-[12px] text-muted-foreground">最后更新：{formatDateOnly(updatedAt)}</span>}
         </CardContent>
       </Card>
-      <Card className="editor-card settings-card">
+      {isAdmin && <Card className="editor-card settings-card">
         <CardHeader>
-          <CardTitle>执行记录与展示设置</CardTitle>
+          <CardTitle>执行记录与 Claude Runtime（管理员全局）</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-[16px]">
           <SwitchRow label="展示思考状态" checked={uiForm.show_thinking_trace} onChange={(next) => updateUiConfig({ show_thinking_trace: next })} />
@@ -353,7 +358,7 @@ export default function PersonaPage() {
           </UIButton>
           {uiUpdatedAt && <span className="text-[12px] text-muted-foreground">最后更新：{formatDateOnly(uiUpdatedAt)}</span>}
         </CardContent>
-      </Card>
+      </Card>}
     </>
   );
 }

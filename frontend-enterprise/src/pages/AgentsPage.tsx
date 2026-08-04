@@ -24,6 +24,7 @@ import {
   employeeProfile,
 } from '../employee';
 import { emitAgentScopeChange, persistSharedAgentScope } from '../lib/agent-scope-storage';
+import { EnterpriseRoute } from '../enums/routes';
 import type { AgentProfileRead } from '../types';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
@@ -134,6 +135,13 @@ export default function AgentsPage({
 
   function startEmployeeChat(row: AgentProfileRead) {
     navigate(`/workspace/chat/draft/${row.id}`);
+  }
+
+  function openPersonaRuntimeSettings(row: AgentProfileRead) {
+    persistSharedAgentScope(row.id, currentUser?.id);
+    emitAgentScopeChange(row.id);
+    setProfileAgent(null);
+    navigate(EnterpriseRoute.Persona);
   }
 
   async function updateStatus(row: AgentProfileRead, status: 'active' | 'archived') {
@@ -312,6 +320,7 @@ export default function AgentsPage({
         currentUser={currentUser}
         onClose={() => setProfileAgent(null)}
         onSaved={updateAgentInList}
+        onOpenAdvancedSettings={openPersonaRuntimeSettings}
       />
       <ConfirmDialog
         open={Boolean(deleteTarget)}

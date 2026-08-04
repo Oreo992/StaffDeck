@@ -395,6 +395,10 @@ export default function DashboardPage({
         currentUser={currentUser}
         onClose={() => setProfileEditorOpen(false)}
         onSaved={(saved) => setAgents((current) => current.map((item) => (item.id === saved.id ? saved : item)))}
+        onOpenAdvancedSettings={() => {
+          setProfileEditorOpen(false);
+          navigate(EnterpriseRoute.Persona);
+        }}
       />
     </div>
   );

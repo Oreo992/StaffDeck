@@ -23,6 +23,8 @@ import {
   visibleEmployeeAgents,
 } from '../employee';
 import type { AgentProfileRead } from '../types';
+import { emitAgentScopeChange, persistSharedAgentScope } from '../lib/agent-scope-storage';
+import { EnterpriseRoute } from '../enums/routes';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
 
@@ -117,6 +119,13 @@ export default function EmployeeGalleryPage({
     } finally {
       setStartingAgentId(null);
     }
+  }
+
+  function openPersonaRuntimeSettings(row: AgentProfileRead) {
+    persistSharedAgentScope(row.id, currentUser?.id);
+    emitAgentScopeChange(row.id);
+    setProfileAgent(null);
+    navigate(EnterpriseRoute.Persona);
   }
 
   async function updateStatus(row: AgentProfileRead, status: 'active' | 'archived') {
@@ -260,6 +269,7 @@ export default function EmployeeGalleryPage({
         currentUser={currentUser}
         onClose={() => setProfileAgent(null)}
         onSaved={updateAgentInList}
+        onOpenAdvancedSettings={openPersonaRuntimeSettings}
       />
       <ConfirmDialog
         open={Boolean(deleteTarget)}

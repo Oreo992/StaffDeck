@@ -60,12 +60,14 @@ export default function EmployeeProfileEditor({
   open,
   onClose,
   onSaved,
+  onOpenAdvancedSettings,
   currentUser,
 }: {
   agent?: AgentProfileRead | null;
   open: boolean;
   onClose: () => void;
   onSaved?: (agent: AgentProfileRead) => void;
+  onOpenAdvancedSettings?: (agent: AgentProfileRead) => void;
   currentUser?: EnterpriseAuthUser;
 }) {
   const [form, setForm] = useState<EmployeeProfileFormValues>(BLANK_FORM);
@@ -191,9 +193,31 @@ export default function EmployeeProfileEditor({
               <LabeledField label="看板摘要">
                 <Textarea rows={2} value={form.systemPromptSummary} placeholder="用于数字员工档案页顶部展示的 system prompt 摘要" onChange={(event) => update({ systemPromptSummary: event.target.value })} />
               </LabeledField>
-              <LabeledField label="岗位执行约束">
+              <LabeledField label="人设 / 岗位执行约束">
                 <Textarea rows={4} value={form.personaPrompt} placeholder="员工在对话中的角色、人设、回复风格和执行边界" onChange={(event) => update({ personaPrompt: event.target.value })} />
               </LabeledField>
+
+              {agent && onOpenAdvancedSettings && (
+                <div className="rounded-[10px] border border-[#e3e7f1] bg-[#f8f9fc] px-[14px] py-[12px]">
+                  <div className="flex items-center justify-between gap-[16px]">
+                    <div>
+                      <strong className="text-[13px] text-[#18181a]">人设与 Claude Runtime</strong>
+                      <p className="m-0 mt-[4px] text-[12px] text-muted-foreground">
+                        人设可在这里直接修改；模型、SOP 白名单和修复轮次在高级设置中管理。
+                      </p>
+                    </div>
+                    <UIButton
+                      type="button"
+                      variant="outline"
+                      disabled={saving}
+                      onClick={() => onOpenAdvancedSettings(agent)}
+                      className="shrink-0 rounded-[9px] border-[#d8ddea] bg-white"
+                    >
+                      高级设置
+                    </UIButton>
+                  </div>
+                </div>
+              )}
 
               <div className="employee-profile-form-grid is-tags">
                 <LabeledField label="掌握方向">

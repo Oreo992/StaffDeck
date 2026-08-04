@@ -78,6 +78,7 @@ const CAPABILITY_NAV: NavItem[] = [
 const SYSTEM_NAV: NavItem[] = [
   { route: EnterpriseRoute.Accounts, label: '账号管理', Icon: IconAccounts },
   { route: EnterpriseRoute.Models, label: '模型配置', Icon: IconModels },
+  { route: EnterpriseRoute.Persona, label: '人设与运行时', Icon: IconFile },
 ];
 
 function primaryNavItems(isAdmin: boolean): NavItem[] {

@@ -1839,5 +1839,14 @@
   "自动判断": "Automatic",
   "只读": "Read-only",
   "写入": "Write",
-  "破坏性": "Destructive"
+  "破坏性": "Destructive",
+  "人设与运行时": "Persona & Runtime",
+  "人设 / 岗位执行约束": "Persona / Role Execution Constraints",
+  "人设与 Claude Runtime": "Persona & Claude Runtime",
+  "人设可在这里直接修改；模型、SOP 白名单和修复轮次在高级设置中管理。": "Edit the persona here; manage the model, SOP allowlist, and repair rounds in advanced settings.",
+  "高级设置": "Advanced Settings",
+  "组织默认员工": "Organization Default Employee",
+  "当前员工：": "Current employee: ",
+  "。人设按员工保存；Runtime 配置由管理员全局管理。": ". Personas are saved per employee; runtime configuration is managed globally by administrators.",
+  "执行记录与 Claude Runtime（管理员全局）": "Execution Trace & Claude Runtime (Global Admin Setting)"
 }
