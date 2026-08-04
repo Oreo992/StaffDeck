@@ -521,6 +521,9 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         complete = next(item for item in events if item["event"] == "complete")
         assert complete["data"]["reply"] == "普通对话回复 1"
         assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
+        assert [tool.name for tool in harness.requests[0].tools] == [
+            "staffdeck.activate_sop"
+        ]
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert not any(

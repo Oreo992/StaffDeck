@@ -2975,10 +2975,14 @@ class AgentLoop:
             str(item) for item in (ui_config.claude_skill_allowlist_json or []) if str(item)
         }
         available_sops = [skill for skill in skills if skill.skill_id in allowlist]
+        sop_by_id = {skill.skill_id: skill for skill in available_sops}
+        suggested_sop_id = suggested_sop_id if suggested_sop_id in sop_by_id else None
         read_tools = [
             tool
             for tool in tools
-            if tool.enabled and tool_effect_level(tool) == ToolEffectLevel.READ.value
+            if not suggested_sop_id
+            and tool.enabled
+            and tool_effect_level(tool) == ToolEffectLevel.READ.value
         ]
         visible_kb_ids = visible_knowledge_base_ids(
             self.db, request.tenant_id, chat_session.agent_id
@@ -3024,8 +3028,6 @@ class AgentLoop:
                 )
             )
         tool_by_name = {tool.name: tool for tool in read_tools}
-        sop_by_id = {skill.skill_id: skill for skill in available_sops}
-        suggested_sop_id = suggested_sop_id if suggested_sop_id in sop_by_id else None
         requested_sop: Skill | None = None
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -3360,7 +3362,12 @@ class AgentLoop:
                     for skill in available_sops
                 ],
                 "router_suggestion": suggested_sop_id,
-                "instruction": "直接处理；仅在必要时调用 staffdeck.activate_sop。",
+                "instruction": (
+                    "Router 仅建议流程：若现在执行，先调用 staffdeck.activate_sop；"
+                    "若只需方案或说明，直接回答且不要激活。"
+                    if suggested_sop_id
+                    else "直接处理；仅在必要时调用 staffdeck.activate_sop。"
+                ),
             },
             ensure_ascii=False,
         )
