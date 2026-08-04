@@ -153,6 +153,59 @@ def test_audit_rejects_claimed_completion_without_required_slot_or_tool_evidence
     assert result.repair_contract is not None
 
 
+def test_audit_treats_multiple_allowed_tools_as_alternatives() -> None:
+    skill = {
+        "skill_id": "research_demo",
+        "nodes": [
+            {
+                "node_id": "research",
+                "type": "tool_call",
+                "allowed_actions": [
+                    "call_tool:research.primary",
+                    "call_tool:research.fallback",
+                ],
+            }
+        ],
+        "edges": [],
+        "terminal_node_ids": ["research"],
+    }
+    tools = [
+        Tool(
+            id="tool_research_primary",
+            tenant_id="tenant_demo",
+            name="research.primary",
+            method="GET",
+            url="https://example.test/primary",
+            effect_level="read",
+        ),
+        Tool(
+            id="tool_research_fallback",
+            tenant_id="tenant_demo",
+            name="research.fallback",
+            method="GET",
+            url="https://example.test/fallback",
+            effect_level="read",
+        ),
+    ]
+    supervisor = SopSupervisor()
+    segment = supervisor.compile_segment(skill, "research", {}, tools)
+    ledger = EvidenceLedger()
+    ledger.record_tool_result("research.primary", {}, True, {"result": "enough"})
+
+    result = supervisor.audit(
+        segment,
+        skill,
+        {},
+        HarnessStructuredOutput(reply="研究完成"),
+        ledger,
+        attempt=0,
+        max_repairs=2,
+    )
+
+    assert result.outcome == SopAuditOutcome.PASSED
+    assert result.missing_evidence == []
+
+
 def test_audit_accepts_only_declared_slots_and_ignores_graph_claims() -> None:
     supervisor = SopSupervisor()
     segment = supervisor.compile_segment(

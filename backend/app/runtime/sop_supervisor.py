@@ -217,9 +217,16 @@ class SopSupervisor:
                 field_key = str(field_name)
                 if not self._has_slot(merged_slots, field_key):
                     node_missing.append(f"slot:{field_key}")
-            for tool_name in self._node_tool_names(node):
-                if not evidence.has_successful_tool(tool_name):
-                    node_missing.append(f"tool:{tool_name}")
+            tool_names = self._node_tool_names(node)
+            if tool_names and not any(
+                evidence.has_successful_tool(tool_name) for tool_name in tool_names
+            ):
+                marker = (
+                    f"tool:{tool_names[0]}"
+                    if len(tool_names) == 1
+                    else f"tool:any:{'|'.join(tool_names)}"
+                )
+                node_missing.append(marker)
             if self._is_knowledge_node(node) and not evidence.has_knowledge_evidence():
                 node_missing.append(f"knowledge:{node_id}")
             if node_missing:
