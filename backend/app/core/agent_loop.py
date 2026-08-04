@@ -1634,7 +1634,7 @@ class AgentLoop:
             )
             persona_prompt = self._get_persona_prompt(request.tenant_id, chat_session.agent_id)
             self._drop_unavailable_skill_state(request.tenant_id, chat_session, skills)
-            if not skills:
+            if not skills and not self._is_claude_supervised_session(chat_session):
                 no_skill_context = self._conversation_context(
                     chat_session, model_config=model_config
                 )
@@ -1809,7 +1809,10 @@ class AgentLoop:
                 self._turn_payload(router_decision.model_dump(mode="json"), user_message_id),
             )
             capability_selection: GeneralSkillSelection | None = None
-            if self._scene_router_deferred_to_general(router_decision):
+            if (
+                not self._is_claude_supervised_session(chat_session)
+                and self._scene_router_deferred_to_general(router_decision)
+            ):
                 capability = self._select_general_capability(
                     request.message,
                     model_config,
@@ -1852,42 +1855,55 @@ class AgentLoop:
                 request.tenant_id, chat_session.active_skill_id, chat_session.agent_id
             )
             if self._is_claude_supervised_session(chat_session):
-                if not active_skill:
-                    raise AgentLoopPreconditionError(
-                        "claude_runtime_requires_skill",
-                        "Claude Supervised Runtime Pilot 只能执行已发布且在白名单中的 SOP。",
+                if active_skill:
+                    yield self._stream_event(
+                        "skill_state",
+                        chat_session,
+                        self._skill_state_payload(
+                            chat_session,
+                            skills,
+                            self._runtime_stream_context(
+                                router_decision, before_skill, before_step, chat_session
+                            ),
+                            user_message_id=user_message_id,
+                        ),
                     )
-                yield self._stream_event(
-                    "skill_state",
-                    chat_session,
-                    self._skill_state_payload(
+                    yield self._stream_status(
+                        chat_session,
+                        "claude_supervised",
+                        "Claude 正在执行受 StaffDeck 监督的 SOP",
+                        {
+                            "active_skill_id": chat_session.active_skill_id,
+                            "active_step_id": chat_session.active_step_id,
+                        },
+                        user_message_id=user_message_id,
+                    )
+                    outcome = yield from self._stream_claude_supervised_response(
+                        request,
+                        chat_session,
+                        active_skill,
+                        tools,
+                        persona_prompt,
+                        conversation_context,
+                        user_message_id,
+                    )
+                else:
+                    yield self._stream_status(
+                        chat_session,
+                        "claude_conversation",
+                        "Claude 正在回复",
+                        {"tool_access": "read_only", "sop_active": False},
+                        user_message_id=user_message_id,
+                    )
+                    outcome = yield from self._stream_claude_conversation_response(
+                        request,
                         chat_session,
                         skills,
-                        self._runtime_stream_context(
-                            router_decision, before_skill, before_step, chat_session
-                        ),
-                        user_message_id=user_message_id,
-                    ),
-                )
-                yield self._stream_status(
-                    chat_session,
-                    "claude_supervised",
-                    "Claude 正在执行受 StaffDeck 监督的 SOP",
-                    {
-                        "active_skill_id": chat_session.active_skill_id,
-                        "active_step_id": chat_session.active_step_id,
-                    },
-                    user_message_id=user_message_id,
-                )
-                outcome = yield from self._stream_claude_supervised_response(
-                    request,
-                    chat_session,
-                    active_skill,
-                    tools,
-                    persona_prompt,
-                    conversation_context,
-                    user_message_id,
-                )
+                        tools,
+                        persona_prompt,
+                        conversation_context,
+                        user_message_id,
+                    )
                 reply = outcome.reply
                 step_result = outcome.step_result
                 tool_result = outcome.tool_result
@@ -2375,8 +2391,9 @@ class AgentLoop:
         evidence = self._claude_evidence_ledger(chat_session)
         latest_reply = ""
         last_tool_result: ToolResult | None = None
-        total_model_calls = 0
-        total_sdk_turns = 0
+        total_model_calls = int(runtime_state.get("model_calls") or 0)
+        total_sdk_turns = int(runtime_state.get("sdk_turns") or 0)
+        runtime_state["mode"] = "sop"
         approved_tools = set(
             str(item) for item in runtime_state.get("approved_tool_names", []) if str(item)
         )
@@ -2917,23 +2934,333 @@ class AgentLoop:
             tool_result=last_tool_result,
         )
 
+    def _stream_claude_conversation_response(
+        self,
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        skills: list[Skill],
+        tools: list[Tool],
+        persona_prompt: str | None,
+        conversation_context: dict[str, object],
+        user_message_id: str,
+    ) -> Iterator[dict[str, object]]:
+        """Run Claude as an agent; it may request a validated transition into an SOP."""
+        ui_config, model_config = self._claude_runtime_model_configuration(request.tenant_id)
+        try:
+            api_key = decrypt_secret(model_config.api_key_encrypted)
+        except Exception as exc:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_secret_error", "Claude Runtime 模型密钥无法解密。"
+            ) from exc
+        if not api_key:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_missing_key", "Claude Runtime 模型没有配置 API Key。"
+            )
+
+        allowlist = {
+            str(item) for item in (ui_config.claude_skill_allowlist_json or []) if str(item)
+        }
+        available_sops = [skill for skill in skills if skill.skill_id in allowlist]
+        read_tools = [
+            tool
+            for tool in tools
+            if tool.enabled and tool_effect_level(tool) == ToolEffectLevel.READ.value
+        ]
+        visible_kb_ids = visible_knowledge_base_ids(
+            self.db, request.tenant_id, chat_session.agent_id
+        )
+        harness_tools = [
+            HarnessTool(
+                name=tool.name,
+                description=tool.description or tool.display_name or tool.name,
+                input_schema=tool.input_schema or {"type": "object"},
+                effect_level=ToolEffectLevel.READ,
+            )
+            for tool in read_tools
+        ]
+        if visible_kb_ids:
+            harness_tools.append(
+                HarnessTool(
+                    name="staffdeck.knowledge_search",
+                    description="检索当前数字员工可见的 StaffDeck 知识库。",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                    effect_level=ToolEffectLevel.READ,
+                )
+            )
+        if available_sops:
+            harness_tools.append(
+                HarnessTool(
+                    name="staffdeck.activate_sop",
+                    description="当任务确实需要固定流程时，申请进入一个 StaffDeck SOP。",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "skill_id": {
+                                "type": "string",
+                                "enum": [skill.skill_id for skill in available_sops],
+                            }
+                        },
+                        "required": ["skill_id"],
+                    },
+                    effect_level=ToolEffectLevel.READ,
+                )
+            )
+        tool_by_name = {tool.name: tool for tool in read_tools}
+        sop_by_id = {skill.skill_id: skill for skill in available_sops}
+        requested_sop: Skill | None = None
+
+        def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            nonlocal requested_sop
+            if tool_name == "staffdeck.activate_sop":
+                requested_sop = sop_by_id.get(str(arguments.get("skill_id") or ""))
+                if not requested_sop:
+                    return {
+                        "tool_name": tool_name,
+                        "success": False,
+                        "error": {"code": "NOT_ALLOWED", "message": "SOP 不可用。"},
+                    }
+                return {
+                    "tool_name": tool_name,
+                    "success": True,
+                    "data": {
+                        "skill_id": requested_sop.skill_id,
+                        "status": "accepted",
+                    },
+                }
+            if tool_name == "staffdeck.knowledge_search":
+                search_response = self.knowledge.search(
+                    KnowledgeSearchRequest(
+                        tenant_id=request.tenant_id,
+                        agent_id=chat_session.agent_id,
+                        query=str(arguments.get("query") or request.message),
+                        knowledge_base_ids=visible_kb_ids,
+                        max_chunks=6,
+                    )
+                )
+                payload = search_response.model_dump(mode="json")
+                self.events.record(
+                    request.tenant_id,
+                    chat_session.id,
+                    "knowledge_result",
+                    self._turn_payload(payload, user_message_id),
+                )
+                self.db.commit()
+                return {"tool_name": tool_name, "success": True, "data": payload}
+            tool = tool_by_name.get(tool_name)
+            if not tool:
+                return {
+                    "tool_name": tool_name,
+                    "success": False,
+                    "error": {"code": "NOT_ALLOWED", "message": "工具不可用。"},
+                }
+            result = self._execute_tool_call(
+                request,
+                chat_session,
+                ToolCall(name=tool_name, arguments=arguments),
+                stream_events=[],
+                conversation_context=conversation_context,
+            )
+            return result.model_dump(mode="json")
+
+        runtime_state = dict(chat_session.runtime_state_json or {})
+        sdk_session_id = str(runtime_state.get("sdk_session_id") or "").strip() or None
+        runtime_state.update(
+            {
+                "status": "running",
+                "mode": "conversation",
+                "active_run_id": user_message_id,
+                "sdk_session_id": sdk_session_id,
+            }
+        )
+        chat_session.runtime_state_json = dict(runtime_state)
+        self.db.add(chat_session)
+        self.db.commit()
+        yield self._stream_event(
+            "harness_run_started",
+            chat_session,
+            self._turn_payload(
+                {"runtime_mode": "conversation", "tool_access": "read_only"},
+                user_message_id,
+            ),
+        )
+
+        def event_sink(event_type: str, payload: dict[str, Any]) -> None:
+            self.events.record(
+                request.tenant_id,
+                chat_session.id,
+                event_type,
+                self._turn_payload({**payload, "runtime_mode": "conversation"}, user_message_id),
+            )
+            self.db.commit()
+
+        environment: dict[str, str] = {}
+        if model_config.base_url:
+            environment["ANTHROPIC_BASE_URL"] = model_config.base_url
+        max_budget = (model_config.extra_body_json or {}).get("max_budget_usd")
+        run_request = HarnessRunRequest(
+            run_id=user_message_id,
+            model=model_config.model,
+            api_key=api_key,
+            prompt=self._claude_conversation_prompt(
+                request, conversation_context, available_sops
+            ),
+            system_prompt=self._claude_conversation_system_prompt(persona_prompt),
+            tools=harness_tools,
+            execute_tool=execute_tool,
+            event_sink=event_sink,
+            max_turns=max(1, min(int(ui_config.agent_loop_max_actions) * 2, 20)),
+            max_budget_usd=float(max_budget) if max_budget is not None else None,
+            environment=environment,
+        )
+        runtime_call = (
+            self.claude_runtime.resume(sdk_session_id, run_request)
+            if sdk_session_id
+            else self.claude_runtime.run_segment(run_request)
+        )
+        run_result = asyncio.run(runtime_call)
+        runtime_state["sdk_session_id"] = run_result.session_id or sdk_session_id
+        runtime_state["model_calls"] = int(runtime_state.get("model_calls") or 0) + 1
+        runtime_state["sdk_turns"] = int(runtime_state.get("sdk_turns") or 0) + run_result.num_turns
+        runtime_state.pop("active_run_id", None)
+
+        if requested_sop and not run_result.is_error:
+            start_step_id = self._first_step_id(requested_sop)
+            if not start_step_id:
+                requested_sop = None
+            else:
+                self.runtime.apply_decision(
+                    chat_session,
+                    RouterDecision(
+                        decision="start_new_task",
+                        target_skill_id=requested_sop.skill_id,
+                        target_step_id=start_step_id,
+                        confidence=1.0,
+                        user_intent="Claude 申请进入 SOP",
+                        reason="Claude 根据任务需要申请，StaffDeck 已验证员工绑定和白名单。",
+                        source_message=request.message,
+                    ),
+                )
+                runtime_state.update(
+                    {
+                        "status": "sop_activated",
+                        "mode": "sop",
+                        "activated_skill_id": requested_sop.skill_id,
+                    }
+                )
+                chat_session.runtime_state_json = dict(runtime_state)
+                self.events.record(
+                    request.tenant_id,
+                    chat_session.id,
+                    "claude_sop_activated",
+                    self._turn_payload(
+                        {
+                            "skill_id": requested_sop.skill_id,
+                            "step_id": start_step_id,
+                            "source": "claude",
+                        },
+                        user_message_id,
+                    ),
+                )
+                self.db.add(chat_session)
+                self.db.commit()
+                yield self._stream_status(
+                    chat_session,
+                    "claude_supervised",
+                    f"Claude 已进入 SOP：{requested_sop.name}",
+                    {
+                        "active_skill_id": requested_sop.skill_id,
+                        "active_step_id": start_step_id,
+                        "activation_source": "claude",
+                    },
+                    user_message_id=user_message_id,
+                )
+                return (
+                    yield from self._stream_claude_supervised_response(
+                        request,
+                        chat_session,
+                        requested_sop,
+                        tools,
+                        persona_prompt,
+                        conversation_context,
+                        user_message_id,
+                    )
+                )
+
+        if run_result.is_error:
+            runtime_state.update(
+                {
+                    "status": "failed",
+                    "error_code": run_result.error_code,
+                    "error_message": run_result.error_message,
+                }
+            )
+            reply = (
+                "Claude Runtime 本次对话失败，系统未自动切换到旧 Runtime。"
+                "请稍后重试。"
+            )
+            self.events.record(
+                request.tenant_id,
+                chat_session.id,
+                "harness_run_failed_closed",
+                self._turn_payload(
+                    {
+                        "code": run_result.error_code,
+                        "message": run_result.error_message,
+                        "fallback": False,
+                        "runtime_mode": "conversation",
+                    },
+                    user_message_id,
+                ),
+            )
+        else:
+            runtime_state.update(
+                {
+                    "status": "completed",
+                    "error_code": None,
+                    "error_message": None,
+                }
+            )
+            reply = run_result.output.reply.strip() or run_result.text.strip() or FALLBACK_REPLY
+
+        chat_session.runtime_state_json = dict(runtime_state)
+        self.db.add(chat_session)
+        self.db.commit()
+        return ClaudeSupervisedOutcome(
+            reply=reply,
+            step_result=StepAgentResult(
+                action="reply",
+                reply=reply,
+                is_step_completed=False,
+            ),
+        )
+
     def _is_claude_supervised_session(self, chat_session: ChatSession) -> bool:
         return (chat_session.runtime_mode or "legacy") == "claude_supervised"
 
     def _claude_runtime_configuration(
         self, tenant_id: str, skill_id: str
     ) -> tuple[UIConfig, ModelConfig]:
-        ui_config = self.db.get(UIConfig, tenant_id)
-        if not ui_config or not ui_config.claude_runtime_enabled:
-            raise AgentLoopPreconditionError(
-                "claude_runtime_disabled", "Claude Supervised Runtime 尚未由管理员启用。"
-            )
+        ui_config, model_config = self._claude_runtime_model_configuration(tenant_id)
         allowlist = {
             str(item) for item in (ui_config.claude_skill_allowlist_json or []) if str(item)
         }
         if skill_id not in allowlist:
             raise AgentLoopPreconditionError(
                 "claude_runtime_skill_not_allowed", "当前 SOP 不在 Claude Runtime 白名单中。"
+            )
+        return ui_config, model_config
+
+    def _claude_runtime_model_configuration(
+        self, tenant_id: str
+    ) -> tuple[UIConfig, ModelConfig]:
+        ui_config = self.db.get(UIConfig, tenant_id)
+        if not ui_config or not ui_config.claude_runtime_enabled:
+            raise AgentLoopPreconditionError(
+                "claude_runtime_disabled", "Claude Supervised Runtime 尚未由管理员启用。"
             )
         model_id = str(ui_config.claude_model_config_id or "").strip()
         model_config = self.db.get(ModelConfig, model_id) if model_id else None
@@ -2979,6 +3306,46 @@ class AgentLoop:
                 "只返回约定的结构化输出；reply 是审计通过后才会展示给用户的候选回答。",
             ]
             if item
+        )
+
+    def _claude_conversation_system_prompt(self, persona_prompt: str | None) -> str:
+        persona = (persona_prompt or "").strip()
+        return "\n".join(
+            item
+            for item in [
+                persona,
+                "你是 StaffDeck 中可自主完成任务的 Claude Agent。",
+                "自然回答；需要信息时使用可见的只读工具。",
+                "只有任务确实需要固定流程时才申请进入 SOP，不要把普通对话变成流程执行。",
+                "StaffDeck 负责权限和流程状态；不要声称未发生的工具调用。",
+                "在 reply 中直接回答用户。",
+            ]
+            if item
+        )
+
+    def _claude_conversation_prompt(
+        self,
+        request: ChatTurnRequest,
+        conversation_context: dict[str, object],
+        available_sops: list[Skill],
+    ) -> str:
+        return json.dumps(
+            {
+                "task": "作为 Agent 处理当前消息",
+                "user_message": request.message,
+                "recent_conversation": conversation_context,
+                "available_sops": [
+                    {
+                        "skill_id": skill.skill_id,
+                        "name": skill.name,
+                        "description": (skill.content_json or {}).get("description", ""),
+                        "goal": (skill.content_json or {}).get("goal", []),
+                    }
+                    for skill in available_sops
+                ],
+                "instruction": "直接处理；仅在必要时调用 staffdeck.activate_sop。",
+            },
+            ensure_ascii=False,
         )
 
     def _claude_segment_prompt(
@@ -7035,6 +7402,9 @@ class AgentLoop:
                         },
                         "required": ["query"],
                     },
+                    effect_level=ToolEffectLevel.READ.value,
+                    method="POST",
+                    config_json={},
                     allowed_skills_json=[],
                 )
             )

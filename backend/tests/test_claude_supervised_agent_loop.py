@@ -7,6 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.agent_loop import AgentLoop, ClaudeSupervisedOutcome
 from app.db.models import (
+    AgentEvent,
     ChatSession,
     HumanHandoffRequest,
     ModelConfig,
@@ -22,6 +23,7 @@ from app.runtime.contracts import (
 )
 from app.security.encryption import encrypt_secret
 from app.session.session_schema import ChatTurnRequest
+from app.session.session_schema import RouterDecision
 from app.tools.tool_schema import ToolResult
 
 
@@ -70,6 +72,79 @@ class _UnexpectedHarness:
         self, checkpoint_id: str, request: HarnessRunRequest
     ) -> HarnessRunResult:
         raise AssertionError("side-effect segment must not resume before explicit approval")
+
+    def cancel(self, run_id: str) -> bool:
+        return False
+
+
+class _ConversationHarness:
+    def __init__(self) -> None:
+        self.requests: list[HarnessRunRequest] = []
+
+    async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
+        self.requests.append(request)
+        turn = len(self.requests)
+        return HarnessRunResult(
+            session_id=f"conversation-session-{turn}",
+            output=HarnessStructuredOutput(reply=f"普通对话回复 {turn}"),
+            num_turns=1,
+        )
+
+    async def resume(
+        self, checkpoint_id: str, request: HarnessRunRequest
+    ) -> HarnessRunResult:
+        request.resume_session_id = checkpoint_id
+        return await self.run_segment(request)
+
+    def cancel(self, run_id: str) -> bool:
+        return False
+
+
+class _SopActivatingHarness:
+    def __init__(self) -> None:
+        self.requests: list[HarnessRunRequest] = []
+        self.sop_calls = 0
+
+    async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
+        self.requests.append(request)
+        tool_names = {tool.name for tool in request.tools}
+        if "staffdeck.activate_sop" in tool_names:
+            assert request.execute_tool is not None
+            result = request.execute_tool("staffdeck.activate_sop", {"skill_id": "graph_demo"})
+            assert isinstance(result, dict) and result["success"] is True
+            return HarnessRunResult(
+                session_id="agent-session-1",
+                output=HarnessStructuredOutput(reply="我会按流程查询。"),
+                num_turns=2,
+            )
+
+        self.sop_calls += 1
+        if self.sop_calls == 1:
+            return HarnessRunResult(
+                session_id="agent-session-2",
+                output=HarnessStructuredOutput(
+                    reply="正在准备查询。",
+                    slot_updates={"request_type": "price", "product_name": "A1"},
+                ),
+                num_turns=1,
+            )
+        assert request.execute_tool is not None
+        result = request.execute_tool("product.price_query", {"product_name": "A1"})
+        assert isinstance(result, dict) and result["success"] is True
+        return HarnessRunResult(
+            session_id="agent-session-3",
+            output=HarnessStructuredOutput(
+                reply="A1 当前价格为 99 元。",
+                slot_updates={"request_type": "price", "product_name": "A1"},
+            ),
+            num_turns=2,
+        )
+
+    async def resume(
+        self, checkpoint_id: str, request: HarnessRunRequest
+    ) -> HarnessRunResult:
+        request.resume_session_id = checkpoint_id
+        return await self.run_segment(request)
 
     def cancel(self, run_id: str) -> bool:
         return False
@@ -232,6 +307,173 @@ def test_supervised_loop_repairs_with_same_sdk_session_and_commits_only_after_ev
             "query",
             "reply",
         ]
+
+
+def test_skillless_claude_conversation_reuses_session_with_read_tools_without_sop() -> None:
+    with _test_session() as db:
+        chat_session, _skill_row, _tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        chat_session.slots_json = {"preserved": "value"}
+        ui_config = db.get(UIConfig, "tenant_demo")
+        assert ui_config is not None
+        ui_config.claude_skill_allowlist_json = []
+        db.add(ui_config)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _ConversationHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+
+        first = _consume_return(
+            loop._stream_claude_conversation_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="你好",
+                ),
+                chat_session,
+                [_skill()],
+                [_tool],
+                "你是 QQQ 的 Claude 版本。",
+                {},
+                "turn_greeting_1",
+            )
+        )
+        second = _consume_return(
+            loop._stream_claude_conversation_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="你还记得我吗？",
+                ),
+                chat_session,
+                [_skill()],
+                [_tool],
+                "你是 QQQ 的 Claude 版本。",
+                {},
+                "turn_greeting_2",
+            )
+        )
+        db.refresh(chat_session)
+
+        assert first.reply == "普通对话回复 1"
+        assert second.reply == "普通对话回复 2"
+        assert [item.resume_session_id for item in harness.requests] == [
+            None,
+            "conversation-session-1",
+        ]
+        assert all(item.execute_tool is not None for item in harness.requests)
+        assert [tool.name for tool in harness.requests[0].tools] == ["product.price_query"]
+        assert "可自主完成任务" in harness.requests[0].system_prompt
+        assert chat_session.runtime_state_json["sdk_session_id"] == "conversation-session-2"
+        assert chat_session.runtime_state_json["status"] == "completed"
+        assert chat_session.active_skill_id is None
+        assert chat_session.active_step_id is None
+        assert chat_session.slots_json == {"preserved": "value"}
+
+
+def test_claude_agent_can_request_and_complete_a_validated_sop_in_the_same_turn() -> None:
+    with _test_session() as db:
+        chat_session, skill, tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        chat_session.slots_json = {"product_name": "A1"}
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _SopActivatingHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+        loop._execute_tool_call = lambda *args, **kwargs: ToolResult(  # type: ignore[method-assign]
+            tool_name="product.price_query", success=True, data={"price": 99}
+        )
+
+        outcome = _consume_return(
+            loop._stream_claude_conversation_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="按标准流程查询 A1 价格",
+                ),
+                chat_session,
+                [skill],
+                [tool],
+                "你是 QQQ 的 Claude 版本。",
+                {},
+                "turn_activate_sop",
+            )
+        )
+        db.refresh(chat_session)
+
+        assert outcome.reply == "A1 当前价格为 99 元。"
+        assert [item.resume_session_id for item in harness.requests] == [
+            None,
+            "agent-session-1",
+            "agent-session-2",
+        ]
+        assert chat_session.runtime_state_json["activated_skill_id"] == "graph_demo"
+        assert chat_session.runtime_state_json["sdk_session_id"] == "agent-session-3"
+        assert chat_session.runtime_state_json["status"] == "completed"
+        assert chat_session.active_skill_id is None
+        assert any(
+            event.event_type == "claude_sop_activated"
+            for event in db.exec(select(AgentEvent)).all()
+        )
+
+
+def test_skillless_greeting_uses_claude_agent_path_through_stream_endpoint() -> None:
+    with _test_session() as db:
+        chat_session, _skill_row, _tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        model = db.get(ModelConfig, "model_claude")
+        assert model is not None
+        model.is_default = True
+        db.add(model)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _ConversationHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+        loop.router.decide = lambda *args, **kwargs: RouterDecision(  # type: ignore[method-assign]
+            decision="answer_only",
+            confidence=0.99,
+            user_intent="用户日常问候",
+            reason="无明确业务诉求，不需要 SOP。",
+            source_message="你好",
+        )
+        loop._select_general_capability = lambda *args, **kwargs: (  # type: ignore[method-assign]
+            None,
+            None,
+        )
+        loop._pace_stream = lambda: None  # type: ignore[method-assign]
+
+        events = list(
+            loop.handle_turn_stream(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="你好",
+                )
+            )
+        )
+
+        complete = next(item for item in events if item["event"] == "complete")
+        assert complete["data"]["reply"] == "普通对话回复 1"
+        assert any(
+            item["event"] == "status"
+            and item["data"].get("phase") == "claude_conversation"
+            for item in events
+        )
+        assert not any(item["event"] == "error" for item in events)
+        assert harness.requests[0].resume_session_id is None
 
 
 def test_supervised_loop_stops_before_write_tool_and_requests_explicit_approval() -> None:
