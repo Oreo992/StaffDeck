@@ -51,7 +51,7 @@ from app.security.tenant import ensure_tenant
 from app.scheduled_tasks.schema import ScheduledTaskDraftRead
 from app.scheduled_tasks.service import DEFAULT_TASK_TIME, detect_scheduled_task_draft
 from app.session.attachments import parse_chat_attachment
-from app.session.helpers import public_session
+from app.session.helpers import public_session, resolve_agent_runtime_mode
 from app.session.session_schema import (
     ChatAttachmentRead,
     ChatSessionCreateRequest,
@@ -915,7 +915,10 @@ def chat_turn(
         chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, request.session_id)
         request = _bind_request_to_session_agent(db, request, chat_session, current_user)
     else:
-        _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
+        agent = _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
+        request = request.model_copy(
+            update={"runtime_mode": resolve_agent_runtime_mode(agent, request.runtime_mode)}
+        )
     ensure_tenant(db, request.tenant_id)
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
@@ -955,7 +958,10 @@ def chat_stream(
         chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, request.session_id)
         request = _bind_request_to_session_agent(db, request, chat_session, current_user)
     else:
-        _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
+        agent = _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
+        request = request.model_copy(
+            update={"runtime_mode": resolve_agent_runtime_mode(agent, request.runtime_mode)}
+        )
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
@@ -1715,7 +1721,7 @@ def create_chat_session(
 ) -> ChatSessionRead:
     _ensure_request_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
-    _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
+    agent = _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
     title = _normalize_title(request.title)
     row = ChatSession(
         id=new_id("session"),
@@ -1723,7 +1729,7 @@ def create_chat_session(
         user_id=current_user.id,
         agent_id=request.agent_id,
         title=title,
-        runtime_mode=request.runtime_mode,
+        runtime_mode=resolve_agent_runtime_mode(agent, request.runtime_mode),
     )
     db.add(row)
     db.commit()

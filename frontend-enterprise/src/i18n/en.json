@@ -1848,5 +1848,8 @@
   "组织默认员工": "Organization Default Employee",
   "当前员工：": "Current employee: ",
   "。人设按员工保存；Runtime 配置由管理员全局管理。": ". Personas are saved per employee; runtime configuration is managed globally by administrators.",
-  "执行记录与 Claude Runtime（管理员全局）": "Execution Trace & Claude Runtime (Global Admin Setting)"
+  "执行记录与 Claude Runtime（管理员全局）": "Execution Trace & Claude Runtime (Global Admin Setting)",
+  "默认 Runtime": "Default Runtime",
+  "锁定员工 Runtime": "Lock Employee Runtime",
+  "新会话强制使用上述 Runtime。": "Force new sessions to use the runtime above."
 }

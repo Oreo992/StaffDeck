@@ -183,7 +183,7 @@ class ChatSessionCreateRequest(BaseModel):
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     title: Optional[str] = None
-    runtime_mode: RuntimeModeValue = "legacy"
+    runtime_mode: Optional[RuntimeModeValue] = None
 
 
 class ChatSessionUpdateRequest(BaseModel):

@@ -1,7 +1,23 @@
 from __future__ import annotations
 
-from app.db.models import ChatSession
+from app.db.models import AgentProfile, ChatSession
 from app.session.session_schema import SessionPublic
+
+
+RUNTIME_MODES = {"legacy", "claude_supervised"}
+
+
+def resolve_agent_runtime_mode(
+    agent: AgentProfile | None, requested_runtime_mode: str | None = None
+) -> str:
+    """Resolve a new session runtime from an agent preference and the caller selection."""
+    metadata = dict(agent.metadata_json or {}) if agent else {}
+    configured = str(metadata.get("default_runtime_mode") or "legacy").strip()
+    default_runtime = configured if configured in RUNTIME_MODES else "legacy"
+    requested = str(requested_runtime_mode or "").strip()
+    if metadata.get("runtime_mode_locked") is True:
+        return default_runtime
+    return requested if requested in RUNTIME_MODES else default_runtime
 
 
 def public_session(session: ChatSession) -> SessionPublic:

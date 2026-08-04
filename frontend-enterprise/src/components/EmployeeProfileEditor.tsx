@@ -35,6 +35,8 @@ type EmployeeProfileFormValues = {
   workModes: string[];
   status: 'active' | 'archived';
   publishedToGallery: boolean;
+  defaultRuntimeMode: 'legacy' | 'claude_supervised';
+  runtimeModeLocked: boolean;
 };
 
 const STYLE_OPTIONS = ['目标明确', '证据优先', '动作可追溯', '事实先行', '流程推进', '风险克制', '及时追问'];
@@ -53,6 +55,8 @@ const BLANK_FORM: EmployeeProfileFormValues = {
   workModes: [],
   status: 'active',
   publishedToGallery: false,
+  defaultRuntimeMode: 'legacy',
+  runtimeModeLocked: false,
 };
 
 export default function EmployeeProfileEditor({
@@ -90,6 +94,10 @@ export default function EmployeeProfileEditor({
       workModes: profile.workModes,
       status: agent.status === 'archived' ? 'archived' : 'active',
       publishedToGallery: agent.metadata?.published_to_gallery === true,
+      defaultRuntimeMode: agent.metadata?.default_runtime_mode === 'claude_supervised'
+        ? 'claude_supervised'
+        : 'legacy',
+      runtimeModeLocked: agent.metadata?.runtime_mode_locked === true,
     });
   }, [agent, open, profile]);
 
@@ -112,6 +120,8 @@ export default function EmployeeProfileEditor({
         expertise_tags: compactTags(form.expertiseTags),
         work_modes: compactTags(form.workModes),
         published_to_gallery: form.publishedToGallery,
+        default_runtime_mode: form.defaultRuntimeMode,
+        runtime_mode_locked: form.runtimeModeLocked,
       };
       if (form.publishedToGallery && !wasPublished) {
         metadata.gallery_published_at = new Date().toISOString();
@@ -199,6 +209,34 @@ export default function EmployeeProfileEditor({
 
               {agent && onOpenAdvancedSettings && (
                 <div className="rounded-[10px] border border-[#e3e7f1] bg-[#f8f9fc] px-[14px] py-[12px]">
+                  <div className="mb-[12px] grid gap-[12px] sm:grid-cols-2">
+                    <LabeledField label="默认 Runtime">
+                      <Select
+                        value={form.defaultRuntimeMode}
+                        onValueChange={(value) => update({
+                          defaultRuntimeMode: value as 'legacy' | 'claude_supervised',
+                        })}
+                      >
+                        <SelectTrigger className={`${SELECT_TRIGGER_CLASS} w-full bg-white`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="legacy">Legacy Runtime</SelectItem>
+                          <SelectItem value="claude_supervised">Claude Supervised Runtime</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </LabeledField>
+                    <div className="flex items-center justify-between rounded-[9px] border border-[#e3e7f1] bg-white px-[12px] py-[8px]">
+                      <div>
+                        <strong className="text-[12px] text-[#18181a]">锁定员工 Runtime</strong>
+                        <p className="m-0 mt-[3px] text-[11px] text-muted-foreground">新会话强制使用上述 Runtime。</p>
+                      </div>
+                      <Switch
+                        checked={form.runtimeModeLocked}
+                        onCheckedChange={(next) => update({ runtimeModeLocked: next })}
+                      />
+                    </div>
+                  </div>
                   <div className="flex items-center justify-between gap-[16px]">
                     <div>
                       <strong className="text-[13px] text-[#18181a]">人设与 Claude Runtime</strong>

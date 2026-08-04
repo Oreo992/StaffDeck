@@ -84,7 +84,7 @@ from app.session.attachments import (
     message_content_with_attachment_context,
     message_images_from_metadata,
 )
-from app.session.helpers import public_session
+from app.session.helpers import public_session, resolve_agent_runtime_mode
 from app.session.session_schema import (
     ChatTurnRequest,
     ChatTurnResponse,
@@ -6662,12 +6662,13 @@ class AgentLoop:
         session_id = request.session_id or new_id("session")
         chat_session = self.db.get(ChatSession, session_id)
         if not chat_session:
+            agent = self.db.get(AgentProfile, request.agent_id) if request.agent_id else None
             chat_session = ChatSession(
                 id=session_id,
                 tenant_id=request.tenant_id,
                 user_id=request.user_id,
                 agent_id=request.agent_id,
-                runtime_mode=request.runtime_mode or "legacy",
+                runtime_mode=resolve_agent_runtime_mode(agent, request.runtime_mode),
             )
             self.db.add(chat_session)
             self.db.flush()

@@ -518,6 +518,10 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   const draftAgent = activeDraftAgentId
     ? availableAgents.find((agent) => agent.id === activeDraftAgentId) || null
     : null;
+  const draftDefaultRuntimeMode = draftAgent?.metadata?.default_runtime_mode === 'claude_supervised'
+    ? 'claude_supervised'
+    : 'legacy';
+  const draftRuntimeModeLocked = draftAgent?.metadata?.runtime_mode_locked === true;
   const sessionAgent = currentSession?.agent_id
     ? agents.find((agent) => agent.id === currentSession.agent_id) || null
     : null;
@@ -532,8 +536,9 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       && model.provider === 'claude_agent_sdk'
     ))
   );
-  const effectiveRuntimeMode = currentSession?.runtime_mode || selectedRuntimeMode;
-  const runtimeModeLocked = !isDraftConversation;
+  const effectiveRuntimeMode = currentSession?.runtime_mode
+    || (draftRuntimeModeLocked ? draftDefaultRuntimeMode : selectedRuntimeMode);
+  const runtimeModeLocked = !isDraftConversation || draftRuntimeModeLocked;
   const changeRuntimeMode = useCallback((mode: 'legacy' | 'claude_supervised') => {
     if (runtimeModeLocked) return;
     if (mode === 'claude_supervised' && !canUseClaudeRuntime) {
@@ -542,6 +547,10 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
     setSelectedRuntimeMode(mode);
   }, [canUseClaudeRuntime, runtimeModeLocked]);
+  useEffect(() => {
+    if (!isDraftConversation) return;
+    setSelectedRuntimeMode(draftDefaultRuntimeMode);
+  }, [activeDraftAgentId, draftDefaultRuntimeMode, isDraftConversation]);
   const displayedProfile = displayedAgent ? employeeProfile(displayedAgent) : null;
   const emptyProfileTags = displayedProfile?.workStyles.length
     ? displayedProfile.workStyles.slice(0, 3)
@@ -3128,7 +3137,8 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       attachments: readyComposerAttachments.map(toRequestAttachment),
       interactionMode: resolvedInteractionMode,
       modelConfigId: selectedModelConfig?.id,
-      runtimeMode: activeSession?.runtime_mode || selectedRuntimeMode,
+      runtimeMode: activeSession?.runtime_mode
+        || (draftRuntimeModeLocked ? draftDefaultRuntimeMode : selectedRuntimeMode),
       createdAt: new Date().toISOString(),
     };
     setInput('');
@@ -3166,6 +3176,8 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     selectedAgentId,
     selectedModelConfig?.id,
     selectedRuntimeMode,
+    draftDefaultRuntimeMode,
+    draftRuntimeModeLocked,
     sessionId,
     sessions,
     sessionsLoading,

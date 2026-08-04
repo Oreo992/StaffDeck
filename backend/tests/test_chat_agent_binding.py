@@ -208,6 +208,96 @@ def test_create_chat_session_persists_selected_runtime() -> None:
         assert db.get(ChatSession, created.id).runtime_mode == "claude_supervised"
 
 
+def test_create_chat_session_uses_agent_default_runtime() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        current_user = User(
+            id="user_demo", tenant_id="tenant_demo", username="demo", password_hash="x"
+        )
+        db.add(current_user)
+        db.add(
+            AgentProfile(
+                id="agent_claude",
+                tenant_id="tenant_demo",
+                name="Claude 员工",
+                metadata_json={
+                    "owner_user_id": "user_demo",
+                    "default_runtime_mode": "claude_supervised",
+                },
+            )
+        )
+        db.commit()
+
+        created = create_chat_session(
+            ChatSessionCreateRequest(tenant_id="tenant_demo", agent_id="agent_claude"),
+            current_user=current_user,
+            db=db,
+        )
+
+        assert created.runtime_mode == "claude_supervised"
+
+
+def test_locked_agent_runtime_overrides_session_selection() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        current_user = User(
+            id="user_demo", tenant_id="tenant_demo", username="demo", password_hash="x"
+        )
+        db.add(current_user)
+        db.add(
+            AgentProfile(
+                id="agent_claude",
+                tenant_id="tenant_demo",
+                name="Claude 员工",
+                metadata_json={
+                    "owner_user_id": "user_demo",
+                    "default_runtime_mode": "claude_supervised",
+                    "runtime_mode_locked": True,
+                },
+            )
+        )
+        db.commit()
+
+        created = create_chat_session(
+            ChatSessionCreateRequest(
+                tenant_id="tenant_demo", agent_id="agent_claude", runtime_mode="legacy"
+            ),
+            current_user=current_user,
+            db=db,
+        )
+
+        assert created.runtime_mode == "claude_supervised"
+
+
+def test_agent_loop_applies_locked_agent_runtime_to_new_stream_session() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            AgentProfile(
+                id="agent_claude",
+                tenant_id="tenant_demo",
+                name="Claude 员工",
+                metadata_json={
+                    "default_runtime_mode": "claude_supervised",
+                    "runtime_mode_locked": True,
+                },
+            )
+        )
+        db.commit()
+
+        session = AgentLoop(db)._get_or_create_session(
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id="user_demo",
+                agent_id="agent_claude",
+                runtime_mode="legacy",
+                message="开始",
+            )
+        )
+
+        assert session.runtime_mode == "claude_supervised"
+
+
 def test_chat_session_list_exposes_scheduled_origin_without_title_inference() -> None:
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
