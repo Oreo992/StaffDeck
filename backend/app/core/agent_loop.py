@@ -3044,6 +3044,8 @@ class AgentLoop:
                     "data": {
                         "skill_id": requested_sop.skill_id,
                         "status": "accepted",
+                        "checkpoint_required": True,
+                        "instruction": "停止当前动作并返回；StaffDeck 将在下一执行段激活 SOP。",
                     },
                 }
             if tool_name == "staffdeck.knowledge_search":
@@ -3150,7 +3152,11 @@ class AgentLoop:
             tools=harness_tools,
             execute_tool=execute_tool,
             event_sink=event_sink,
-            max_turns=max(1, min(int(ui_config.agent_loop_max_actions) * 2, 20)),
+            max_turns=(
+                3
+                if suggested_sop_id
+                else max(1, min(int(ui_config.agent_loop_max_actions) * 2, 20))
+            ),
             max_budget_usd=float(max_budget) if max_budget is not None else None,
             environment=environment,
         )
@@ -3165,7 +3171,7 @@ class AgentLoop:
         runtime_state["sdk_turns"] = int(runtime_state.get("sdk_turns") or 0) + run_result.num_turns
         runtime_state.pop("active_run_id", None)
 
-        if requested_sop and not run_result.is_error:
+        if requested_sop:
             start_step_id = self._first_step_id(requested_sop)
             if not start_step_id:
                 requested_sop = None

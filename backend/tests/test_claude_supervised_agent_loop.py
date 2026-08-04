@@ -115,6 +115,9 @@ class _SopActivatingHarness:
             return HarnessRunResult(
                 session_id="agent-session-1",
                 output=HarnessStructuredOutput(reply="我会按流程查询。"),
+                is_error=True,
+                error_code="max_turns",
+                error_message="Checkpoint requested after SOP activation.",
                 num_turns=2,
             )
 
@@ -416,6 +419,7 @@ def test_claude_agent_can_request_and_complete_a_validated_sop_in_the_same_turn(
             "agent-session-1",
             "agent-session-2",
         ]
+        assert harness.requests[0].max_turns == 12
         assert chat_session.runtime_state_json["activated_skill_id"] == "graph_demo"
         assert chat_session.runtime_state_json["sdk_session_id"] == "agent-session-3"
         assert chat_session.runtime_state_json["status"] == "completed"
@@ -521,6 +525,7 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         complete = next(item for item in events if item["event"] == "complete")
         assert complete["data"]["reply"] == "普通对话回复 1"
         assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
+        assert harness.requests[0].max_turns == 3
         assert [tool.name for tool in harness.requests[0].tools] == [
             "product.price_query",
             "staffdeck.activate_sop",
