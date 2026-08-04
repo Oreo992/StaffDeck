@@ -476,6 +476,59 @@ def test_skillless_greeting_uses_claude_agent_path_through_stream_endpoint() -> 
         assert harness.requests[0].resume_session_id is None
 
 
+def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None:
+    with _test_session() as db:
+        chat_session, skill_row, tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        model = db.get(ModelConfig, "model_claude")
+        assert model is not None
+        model.is_default = True
+        db.add(model)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _ConversationHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+        loop._list_published_skills = lambda *args, **kwargs: [  # type: ignore[method-assign]
+            skill_row
+        ]
+        loop._list_enabled_tools = lambda *args, **kwargs: [tool]  # type: ignore[method-assign]
+        loop.router.decide = lambda *args, **kwargs: RouterDecision(  # type: ignore[method-assign]
+            decision="start_new_task",
+            target_skill_id="graph_demo",
+            target_step_id="collect",
+            confidence=0.99,
+            user_intent="生成研究执行方案但暂不运行",
+            reason="任务与研究 SOP 匹配。",
+            source_message="先给方案，不要运行",
+        )
+        loop._pace_stream = lambda: None  # type: ignore[method-assign]
+
+        events = list(
+            loop.handle_turn_stream(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="先给方案，不要运行",
+                )
+            )
+        )
+        db.refresh(chat_session)
+
+        complete = next(item for item in events if item["event"] == "complete")
+        assert complete["data"]["reply"] == "普通对话回复 1"
+        assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
+        assert chat_session.active_skill_id is None
+        assert chat_session.active_step_id is None
+        assert not any(
+            event.event_type == "claude_sop_activated"
+            for event in db.exec(select(AgentEvent)).all()
+        )
+
+
 def test_supervised_loop_stops_before_write_tool_and_requests_explicit_approval() -> None:
     with _test_session() as db:
         chat_session, skill, tool = _seed_runtime(db, effect_level="write")

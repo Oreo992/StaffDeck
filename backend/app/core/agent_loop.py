@@ -1838,11 +1838,23 @@ class AgentLoop:
 
             before_skill = chat_session.active_skill_id
             before_step = chat_session.active_step_id
-            self.runtime.apply_decision(chat_session, router_decision)
+            claude_suggested_sop_id: str | None = None
+            decision_applied = True
+            if (
+                self._is_claude_supervised_session(chat_session)
+                and not before_skill
+                and router_decision.target_skill_id
+                and router_decision.decision
+                in {"start_new_task", "continue_active", "switch_to_pending"}
+            ):
+                claude_suggested_sop_id = router_decision.target_skill_id
+                decision_applied = False
+            else:
+                self.runtime.apply_decision(chat_session, router_decision)
             state_pruned = self._drop_unavailable_skill_state(
                 request.tenant_id, chat_session, skills
             )
-            if self._should_record_runtime_event_after_prune(
+            if decision_applied and self._should_record_runtime_event_after_prune(
                 router_decision, chat_session, skills, state_pruned
             ):
                 self._record_runtime_event(
@@ -1903,6 +1915,7 @@ class AgentLoop:
                         persona_prompt,
                         conversation_context,
                         user_message_id,
+                        claude_suggested_sop_id,
                     )
                 reply = outcome.reply
                 step_result = outcome.step_result
@@ -2943,6 +2956,7 @@ class AgentLoop:
         persona_prompt: str | None,
         conversation_context: dict[str, object],
         user_message_id: str,
+        suggested_sop_id: str | None = None,
     ) -> Iterator[dict[str, object]]:
         """Run Claude as an agent; it may request a validated transition into an SOP."""
         ui_config, model_config = self._claude_runtime_model_configuration(request.tenant_id)
@@ -3011,6 +3025,7 @@ class AgentLoop:
             )
         tool_by_name = {tool.name: tool for tool in read_tools}
         sop_by_id = {skill.skill_id: skill for skill in available_sops}
+        suggested_sop_id = suggested_sop_id if suggested_sop_id in sop_by_id else None
         requested_sop: Skill | None = None
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -3106,7 +3121,7 @@ class AgentLoop:
             model=model_config.model,
             api_key=api_key,
             prompt=self._claude_conversation_prompt(
-                request, conversation_context, available_sops
+                request, conversation_context, available_sops, suggested_sop_id
             ),
             system_prompt=self._claude_conversation_system_prompt(persona_prompt),
             tools=harness_tools,
@@ -3328,6 +3343,7 @@ class AgentLoop:
         request: ChatTurnRequest,
         conversation_context: dict[str, object],
         available_sops: list[Skill],
+        suggested_sop_id: str | None,
     ) -> str:
         return json.dumps(
             {
@@ -3343,6 +3359,7 @@ class AgentLoop:
                     }
                     for skill in available_sops
                 ],
+                "router_suggestion": suggested_sop_id,
                 "instruction": "直接处理；仅在必要时调用 staffdeck.activate_sop。",
             },
             ensure_ascii=False,
