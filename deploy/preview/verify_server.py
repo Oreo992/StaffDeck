@@ -84,7 +84,9 @@ def main() -> None:
     selectable_models = [
         item
         for item in models
-        if item.get("model") == EXPECTED_SELECTABLE_MODEL and item.get("enabled")
+        if item.get("model") == EXPECTED_SELECTABLE_MODEL
+        and item.get("provider") == default_model.get("provider")
+        and item.get("enabled")
     ]
     if len(selectable_models) != 1:
         raise RuntimeError("Expected exactly one enabled RC-backed Sonnet choice")
