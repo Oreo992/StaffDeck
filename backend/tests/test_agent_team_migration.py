@@ -111,16 +111,36 @@ def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() ->
     assert "不可逆" in result
 
 
-def test_amazon_research_fetches_real_history_for_html_dashboard() -> None:
-    secondary = next(
-        node
-        for node in SOP_TEMPLATES["cc-amz"]["nodes"]
-        if node["node_id"] == "fetch_secondary"
-    )
+def test_amazon_research_branches_by_depth_and_enforces_evidence_budgets() -> None:
+    content = SOP_TEMPLATES["cc-amz"]
+    nodes = {node["node_id"]: node for node in content["nodes"]}
+    round_tripped = SkillCard.model_validate(content).model_dump(mode="json")
+    round_trip_nodes = {node["node_id"]: node for node in round_tripped["nodes"]}
 
-    assert "HTML" in secondary["instruction"]
-    assert "keepa_info" in secondary["instruction"]
-    assert "不得伪造趋势" in secondary["instruction"]
+    assert content["slot_filling_policy"]["optional_defaults"]["research_depth"] == "L2"
+    assert nodes["research_l1"]["metadata"]["evidence_policy"] == {
+        "min_successful_tools": 1
+    }
+    assert nodes["research_l2"]["metadata"]["evidence_policy"] == {
+        "min_successful_tools": 2
+    }
+    assert nodes["research_l3"]["metadata"]["evidence_policy"] == {
+        "min_successful_tools": 4,
+        "min_tool_families": 2,
+    }
+    assert round_trip_nodes["research_l3"]["metadata"]["evidence_policy"] == {
+        "min_successful_tools": 4,
+        "min_tool_families": 2,
+    }
+    serialized = json.dumps(content, ensure_ascii=False)
+    for required_tool in (
+        "at_sellersprite.keepa_info",
+        "at_sorftime.category_report",
+        "at_sorftime.ali1688_product_search",
+        "at_sorftime.tiktok_product_trend",
+        "at_sorftime.walmart_product_trend_by_product_id",
+    ):
+        assert required_tool in serialized
 
 
 def test_crossborder_trend_research_sop_covers_the_full_evidence_workflow() -> None:

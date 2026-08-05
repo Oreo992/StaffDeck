@@ -3008,17 +3008,40 @@ class AgentLoop:
                 )
             )
         if available_sops:
+            activation_slot_names: set[str] = set()
+            activation_slot_properties: dict[str, Any] = {}
+            for skill in available_sops:
+                content = skill.content_json or {}
+                activation_slot_names.update(_skill_expected_fields(skill))
+                policy = content.get("slot_filling_policy")
+                defaults = policy.get("optional_defaults") if isinstance(policy, dict) else {}
+                if isinstance(defaults, dict):
+                    activation_slot_names.update(str(key) for key in defaults)
+            for name in sorted(activation_slot_names):
+                activation_slot_properties[name] = (
+                    {"type": "string", "enum": ["L1", "L2", "L3"]}
+                    if name == "research_depth"
+                    else {}
+                )
             harness_tools.append(
                 HarnessTool(
                     name="staffdeck.activate_sop",
-                    description="当任务确实需要固定流程时，申请进入一个 SOP。",
+                    description=(
+                        "当任务确实需要固定流程时申请进入 SOP；把当前消息中已经明确的"
+                        "研究对象、站点和 L1/L2/L3 深度一并写入 slots。"
+                    ),
                     input_schema={
                         "type": "object",
                         "properties": {
                             "skill_id": {
                                 "type": "string",
                                 "enum": [skill.skill_id for skill in available_sops],
-                            }
+                            },
+                            "slots": {
+                                "type": "object",
+                                "properties": activation_slot_properties,
+                                "additionalProperties": False,
+                            },
                         },
                         "required": ["skill_id"],
                     },
@@ -3027,9 +3050,10 @@ class AgentLoop:
             )
         tool_by_name = {tool.name: tool for tool in read_tools}
         requested_sop: Skill | None = None
+        requested_sop_slots: dict[str, Any] = {}
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-            nonlocal requested_sop
+            nonlocal requested_sop, requested_sop_slots
             if tool_name == "staffdeck.activate_sop":
                 requested_sop = sop_by_id.get(str(arguments.get("skill_id") or ""))
                 if not requested_sop:
@@ -3038,6 +3062,36 @@ class AgentLoop:
                         "success": False,
                         "error": {"code": "NOT_ALLOWED", "message": "SOP 不可用。"},
                     }
+                content = requested_sop.content_json or {}
+                allowed_slot_names = _skill_expected_fields(requested_sop)
+                policy = content.get("slot_filling_policy")
+                defaults = policy.get("optional_defaults") if isinstance(policy, dict) else {}
+                if isinstance(defaults, dict):
+                    allowed_slot_names.update(str(key) for key in defaults)
+                proposed = arguments.get("slots")
+                proposed_slots = proposed if isinstance(proposed, dict) else {}
+                current_slots = chat_session.slots_json or {}
+                requested_sop_slots = {
+                    **(
+                        {
+                            key: value
+                            for key, value in defaults.items()
+                            if key in allowed_slot_names
+                        }
+                        if isinstance(defaults, dict)
+                        else {}
+                    ),
+                    **{
+                        key: value
+                        for key, value in current_slots.items()
+                        if key in allowed_slot_names
+                    },
+                    **{
+                        str(key): value
+                        for key, value in proposed_slots.items()
+                        if str(key) in allowed_slot_names
+                    },
+                }
                 return {
                     "tool_name": tool_name,
                     "success": True,
@@ -3182,6 +3236,7 @@ class AgentLoop:
                         decision="start_new_task",
                         target_skill_id=requested_sop.skill_id,
                         target_step_id=start_step_id,
+                        slot_hints=requested_sop_slots,
                         confidence=1.0,
                         user_intent="Claude 申请进入 SOP",
                         reason="Claude 根据任务需要申请，平台已验证员工绑定和白名单。",
@@ -3386,6 +3441,12 @@ class AgentLoop:
                         "name": str(skill.name or skill.skill_id).split("·", 1)[-1].strip(),
                         "description": (skill.content_json or {}).get("description", ""),
                         "goal": (skill.content_json or {}).get("goal", []),
+                        "required_info": (skill.content_json or {}).get("required_info", []),
+                        "optional_defaults": (
+                            (skill.content_json or {})
+                            .get("slot_filling_policy", {})
+                            .get("optional_defaults", {})
+                        ),
                     }
                     for skill in available_sops
                 ],

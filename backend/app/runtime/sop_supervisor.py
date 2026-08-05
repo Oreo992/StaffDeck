@@ -64,6 +64,14 @@ class EvidenceLedger:
             for item in self.tool_results
         )
 
+    def successful_tool_names(self, allowed_tool_names: list[str]) -> set[str]:
+        allowed = set(allowed_tool_names)
+        return {
+            str(item.get("tool_name") or "")
+            for item in self.tool_results
+            if item.get("success") is True and item.get("tool_name") in allowed
+        }
+
     def has_knowledge_evidence(self) -> bool:
         return bool(self.knowledge_refs)
 
@@ -82,6 +90,7 @@ class SopSupervisor:
         nodes_by_id = {str(item.get("node_id") or ""): item for item in nodes}
         tool_by_name = {tool.name: tool for tool in tools}
         skill_id = str(skill_content.get("skill_id") or "")
+        effective_slots = self._with_optional_defaults(skill_content, slots)
         current_id = active_step_id
         selected_nodes: list[dict[str, Any]] = []
         selected_tools: list[str] = []
@@ -104,7 +113,7 @@ class SopSupervisor:
                 selected_nodes.append(node)
                 boundary = "handoff"
                 break
-            if self._requires_human_confirmation(node, slots):
+            if self._requires_human_confirmation(node, effective_slots):
                 if selected_nodes:
                     boundary = "human_confirmation"
                     next_step_id = current_id
@@ -140,7 +149,7 @@ class SopSupervisor:
                     else "checkpoint"
                 )
                 break
-            target = self._select_edge_target(outgoing, slots)
+            target = self._select_edge_target(outgoing, effective_slots)
             if not target:
                 boundary = "branch"
                 break
@@ -152,7 +161,7 @@ class SopSupervisor:
                 boundary = "handoff"
                 next_step_id = target
                 break
-            if self._requires_human_confirmation(target_node, slots):
+            if self._requires_human_confirmation(target_node, effective_slots):
                 boundary = "human_confirmation"
                 next_step_id = target
                 break
@@ -202,12 +211,22 @@ class SopSupervisor:
                 for item in node.get("expected_user_info", [])
                 if str(item or "").strip()
             )
+        slot_policy = skill_content.get("slot_filling_policy")
+        if isinstance(slot_policy, dict):
+            optional_defaults = slot_policy.get("optional_defaults")
+            if isinstance(optional_defaults, dict):
+                allowed_slot_names.update(
+                    str(item).strip() for item in optional_defaults if str(item).strip()
+                )
         accepted_slot_updates = {
             key: value
             for key, value in output.slot_updates.items()
             if key in allowed_slot_names
         }
-        merged_slots = {**slots, **accepted_slot_updates}
+        merged_slots = {
+            **self._with_optional_defaults(skill_content, slots),
+            **accepted_slot_updates,
+        }
         missing: list[str] = []
         completed: list[str] = []
         for node in segment.nodes:
@@ -218,15 +237,37 @@ class SopSupervisor:
                 if not self._has_slot(merged_slots, field_key):
                     node_missing.append(f"slot:{field_key}")
             tool_names = self._node_tool_names(node)
-            if tool_names and not any(
-                evidence.has_successful_tool(tool_name) for tool_name in tool_names
-            ):
-                marker = (
-                    f"tool:{tool_names[0]}"
-                    if len(tool_names) == 1
-                    else f"tool:any:{'|'.join(tool_names)}"
-                )
-                node_missing.append(marker)
+            if tool_names:
+                successful_tools = evidence.successful_tool_names(tool_names)
+                metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+                evidence_policy = metadata.get("evidence_policy")
+                if not isinstance(evidence_policy, dict):
+                    evidence_policy = (
+                        node.get("evidence_policy")
+                        if isinstance(node.get("evidence_policy"), dict)
+                        else {}
+                    )
+                minimum_tools = max(1, int(evidence_policy.get("min_successful_tools") or 1))
+                if len(successful_tools) < minimum_tools:
+                    marker = (
+                        f"tool:{tool_names[0]}"
+                        if minimum_tools == 1 and len(tool_names) == 1
+                        else (
+                            f"tool:any:{'|'.join(tool_names)}"
+                            if minimum_tools == 1
+                            else (
+                                f"tool:min_successful:{minimum_tools}:"
+                                f"observed:{len(successful_tools)}"
+                            )
+                        )
+                    )
+                    node_missing.append(marker)
+                minimum_families = max(0, int(evidence_policy.get("min_tool_families") or 0))
+                families = {name.split(".", 1)[0] for name in successful_tools if name}
+                if len(families) < minimum_families:
+                    node_missing.append(
+                        f"tool:min_families:{minimum_families}:observed:{len(families)}"
+                    )
             if self._is_knowledge_node(node) and not evidence.has_knowledge_evidence():
                 node_missing.append(f"knowledge:{node_id}")
             if node_missing:
@@ -313,6 +354,16 @@ class SopSupervisor:
             if isinstance(item, dict) and str(item.get("source_node_id") or "") == node_id
         ]
         return sorted(edges, key=lambda item: int(item.get("priority") or 0))
+
+    def _with_optional_defaults(
+        self, skill_content: dict[str, Any], slots: dict[str, Any]
+    ) -> dict[str, Any]:
+        policy = skill_content.get("slot_filling_policy")
+        defaults = policy.get("optional_defaults") if isinstance(policy, dict) else {}
+        return {
+            **(defaults if isinstance(defaults, dict) else {}),
+            **slots,
+        }
 
     def _select_edge_target(
         self, edges: list[dict[str, Any]], slots: dict[str, Any]

@@ -206,6 +206,86 @@ def test_audit_treats_multiple_allowed_tools_as_alternatives() -> None:
     assert result.missing_evidence == []
 
 
+def test_optional_defaults_select_branch_and_are_valid_slot_updates() -> None:
+    skill = _skill()
+    skill["slot_filling_policy"] = {
+        "optional_defaults": {"request_type": "price", "research_depth": "L2"}
+    }
+    supervisor = SopSupervisor()
+
+    segment = supervisor.compile_segment(skill, "classify", {"product_id": "A1"}, _tools())
+    ledger = EvidenceLedger()
+    ledger.record_tool_result("product.price_query", {"product_id": "A1"}, True, {"price": 99})
+    result = supervisor.audit(
+        segment,
+        skill,
+        {"product_id": "A1"},
+        HarnessStructuredOutput(slot_updates={"research_depth": "L3"}, reply="完成"),
+        ledger,
+        attempt=0,
+        max_repairs=2,
+    )
+
+    assert segment.node_ids == ["classify", "query_price", "reply"]
+    assert result.accepted_slot_updates == {"research_depth": "L3"}
+
+
+def test_audit_enforces_minimum_tools_and_distinct_tool_families() -> None:
+    skill = {
+        "skill_id": "deep_research",
+        "nodes": [
+            {
+                "node_id": "research",
+                "type": "tool_call",
+                "allowed_actions": [
+                    "call_tool:primary.market",
+                    "call_tool:primary.keyword",
+                    "call_tool:secondary.trend",
+                ],
+                "metadata": {
+                    "evidence_policy": {"min_successful_tools": 2, "min_tool_families": 2}
+                },
+            }
+        ],
+        "edges": [],
+        "terminal_node_ids": ["research"],
+    }
+    tools = [
+        Tool(tenant_id="t", name="primary.market", method="GET", url="/market"),
+        Tool(tenant_id="t", name="primary.keyword", method="GET", url="/keyword"),
+        Tool(tenant_id="t", name="secondary.trend", method="GET", url="/trend"),
+    ]
+    supervisor = SopSupervisor()
+    segment = supervisor.compile_segment(skill, "research", {}, tools)
+    one_family = EvidenceLedger()
+    one_family.record_tool_result("primary.market", {}, True, {})
+    one_family.record_tool_result("primary.keyword", {}, True, {})
+
+    repair = supervisor.audit(
+        segment,
+        skill,
+        {},
+        HarnessStructuredOutput(reply="完成"),
+        one_family,
+        attempt=0,
+        max_repairs=2,
+    )
+    one_family.record_tool_result("secondary.trend", {}, True, {})
+    passed = supervisor.audit(
+        segment,
+        skill,
+        {},
+        HarnessStructuredOutput(reply="完成"),
+        one_family,
+        attempt=1,
+        max_repairs=2,
+    )
+
+    assert repair.outcome == SopAuditOutcome.REPAIR
+    assert "tool:min_families:2:observed:1" in repair.missing_evidence
+    assert passed.outcome == SopAuditOutcome.PASSED
+
+
 def test_audit_accepts_only_declared_slots_and_ignores_graph_claims() -> None:
     supervisor = SopSupervisor()
     segment = supervisor.compile_segment(

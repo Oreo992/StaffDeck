@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.0.4"
+MIGRATION_VERSION = "1.1.0"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -183,6 +183,8 @@ AGENT_TOOL_BINDINGS = {
     ],
 }
 
+AMAZON_RESEARCH_TOOL_NAMES = tuple(AGENT_TOOL_BINDINGS["cc-amz"])
+
 
 def _node(
     node_id: str,
@@ -256,6 +258,107 @@ def _linear_sop(
     }
 
 
+def _amazon_research_sop() -> dict[str, Any]:
+    tool_actions = ["continue_flow", *(f"call_tool:{name}" for name in AMAZON_RESEARCH_TOOL_NAMES)]
+    nodes = [
+        _node(
+            "collect_scope",
+            "确认研究范围",
+            "识别产品、ASIN 或关键词。站点、深度和决策问题均为非关键信息；缺失时使用美国站、L2 和是否值得做，不得追问。",
+            expected=["product_or_asin"],
+        ),
+        {
+            **_node(
+                "research_l1",
+                "L1 快速判断",
+                "调用最少的 SellerSprite、Keepa 或 Sorftime 工具取得一项足以支撑判断的真实证据后立即停止；总调用建议不超过 3 次。",
+                node_type="tool_call",
+                actions=tool_actions,
+            ),
+            "metadata": {"evidence_policy": {"min_successful_tools": 1}},
+        },
+        {
+            **_node(
+                "research_l2",
+                "L2 标准研究",
+                "围绕市场、竞争、价格、痛点、流量和门槛按需选择 2—4 个维度；SellerSprite 为主，历史或评论不足时再用 Keepa/Sorftime，证据够用即停。",
+                node_type="tool_call",
+                actions=tool_actions,
+            ),
+            "metadata": {"evidence_policy": {"min_successful_tools": 2}},
+        },
+        {
+            **_node(
+                "research_l3",
+                "L3 完整选品",
+                "覆盖与决策相关的完整维度，至少使用两个数据源交叉验证；允许调用 SellerSprite 15 次、Keepa 6 次、Sorftime 10 次以内，缺失维度直接标注而非反复试错。",
+                node_type="tool_call",
+                actions=tool_actions,
+            ),
+            "metadata": {
+                "evidence_policy": {"min_successful_tools": 4, "min_tool_families": 2}
+            },
+        },
+        _node(
+            "evidence_gate",
+            "证据检查",
+            "区分事实、推断和缺口；逐项标注来源、数据日期及口径。不得把工具失败、空结果或模型记忆写成事实。",
+        ),
+        _node(
+            "reply",
+            "输出 EvidencePack",
+            "先给做/不做/谨慎做，再给关键证据、竞品或关键词机会、风险、数据缺口和下一步。L1 保持简短，L2 使用标准 EvidencePack，L3 给完整决策报告。",
+            node_type="response",
+            actions=["answer_user"],
+        ),
+    ]
+    content = _linear_sop(
+        "amazon-research",
+        "Amazon 选品与竞品研究",
+        "按 L1/L2/L3 意图分档执行；只在任务需要可审计外部证据时进入，证据够用即止。",
+        nodes,
+        triggers=[
+            "这个 ASIN 怎么样",
+            "做一份竞品分析",
+            "这个品类值不值得做",
+            "做完整选品报告",
+            "去 1688 找同款",
+            "对比 Walmart 或 TikTok 趋势",
+        ],
+        goals=["获得可追溯市场证据", "形成选品或竞品判断", "输出标准 EvidencePack"],
+        optional_defaults={
+            "marketplace": "Amazon 美国站",
+            "research_depth": "L2",
+            "decision_question": "是否值得做以及主要风险",
+        },
+    )
+    content["edges"] = [
+        {
+            "source_node_id": "collect_scope",
+            "next_node_id": "research_l1",
+            "predicate_json": {"slot": "research_depth", "op": "eq", "value": "L1"},
+            "priority": 0,
+        },
+        {
+            "source_node_id": "collect_scope",
+            "next_node_id": "research_l3",
+            "predicate_json": {"slot": "research_depth", "op": "eq", "value": "L3"},
+            "priority": 1,
+        },
+        {
+            "source_node_id": "collect_scope",
+            "next_node_id": "research_l2",
+            "condition": "default",
+            "priority": 2,
+        },
+        {"source_node_id": "research_l1", "next_node_id": "evidence_gate"},
+        {"source_node_id": "research_l2", "next_node_id": "evidence_gate"},
+        {"source_node_id": "research_l3", "next_node_id": "evidence_gate"},
+        {"source_node_id": "evidence_gate", "next_node_id": "reply"},
+    ]
+    return content
+
+
 SOP_TEMPLATES = {
     "orange-pm": _linear_sop(
         "orange-routing",
@@ -295,62 +398,7 @@ SOP_TEMPLATES = {
             "materials": "使用当前会话已有材料",
         },
     ),
-    "cc-amz": _linear_sop(
-        "amazon-research",
-        "小卓 · Amazon 选品与竞品研究",
-        "按任务深度收集 Amazon 证据，控制调用预算并输出 EvidencePack。",
-        [
-            _node(
-                "collect_scope",
-                "确认研究范围",
-                "确认产品、ASIN 或关键词；站点默认美国站，研究深度默认 L2，决策问题默认判断是否值得做。后三项均为非关键信息，缺失时采用默认值并标注，不得追问。",
-                expected=["product_or_asin"],
-            ),
-            _node(
-                "fetch_primary",
-                "获取主数据",
-                "优先按 ASIN 或关键词调用最少数量的 SellerSprite 工具；拿到足够证据后停止。",
-                node_type="tool_call",
-                actions=[
-                    "continue_flow",
-                    "call_tool:at_sellersprite.asin_detail",
-                    "call_tool:at_sellersprite.keyword_research",
-                    "call_tool:at_sellersprite.market_research",
-                ],
-            ),
-            _node(
-                "fetch_secondary",
-                "按需交叉验证",
-                "当用户要求 HTML/网页看板时，对已识别的每个 ASIN 调用 at_sellersprite.keepa_info 获取近 90 天真实历史：startTimestamp=当前时间减90天、endTimestamp=当前时间、dailyLatest=true、returnFields=asin,price,bsr,rating,reviews；没有返回历史就明确标缺口，不得伪造趋势。其他情况仅在主数据不足或问题涉及历史、TikTok、Walmart、1688 时调用 Sorftime/Keepa。",
-                node_type="tool_call",
-                actions=[
-                    "continue_flow",
-                    "call_tool:at_sellersprite.keepa_info",
-                    "call_tool:at_sorftime.product_trend",
-                    "call_tool:at_sorftime.product_reviews",
-                ],
-            ),
-            _node(
-                "evidence_gate",
-                "证据检查",
-                "逐项标注来源、日期、计算口径和数据缺口；证据不足时不得下确定结论。",
-            ),
-            _node(
-                "reply",
-                "输出 EvidencePack",
-                "先给做/不做/谨慎做判断，再给关键证据、风险和下一步。",
-                node_type="response",
-                actions=["answer_user"],
-            ),
-        ],
-        triggers=["这个 ASIN 怎么样", "做一份竞品分析", "这个品类值不值得做"],
-        goals=["获得可追溯市场证据", "形成选品或竞品判断", "输出标准 EvidencePack"],
-        optional_defaults={
-            "marketplace": "Amazon 美国站",
-            "research_depth": "L2 标准研究",
-            "decision_question": "是否值得做以及主要风险",
-        },
-    ),
+    "cc-amz": _amazon_research_sop(),
     "cc-copy": _linear_sop(
         "conversion-copy",
         "小宁 · 转化文案生产",
@@ -1037,6 +1085,28 @@ def _index(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
     return {str(row.get(key)): row for row in rows if row.get(key) is not None}
 
 
+def tool_update_payload(row: dict[str, Any], *, effect_level: str) -> dict[str, Any]:
+    """Build a lossless ToolUpdateRequest payload for a discovered MCP tool."""
+    return {
+        "tenant_id": row["tenant_id"],
+        "name": row["name"],
+        "display_name": row.get("display_name"),
+        "description": row.get("description"),
+        "bucket": row.get("bucket") or "Agent Team 数据工具",
+        "tool_type": row.get("tool_type") or "mcp",
+        "method": row.get("method") or "POST",
+        "url": row["url"],
+        "headers": row.get("headers") or {},
+        "auth": row.get("auth") or {},
+        "mcp_config": row.get("mcp_config") or {},
+        "input_schema": row.get("input_schema") or {},
+        "output_schema": row.get("output_schema") or {},
+        "allowed_skills": row.get("allowed_skills") or [],
+        "effect_level": effect_level,
+        "enabled": row.get("enabled") is not False,
+    }
+
+
 def _select_managed_agent(
     candidates: list[dict[str, Any]], desired_name: str
 ) -> dict[str, Any] | None:
@@ -1118,6 +1188,28 @@ def apply_manifest(api: StaffDeckApi, manifest: dict[str, Any]) -> dict[str, Any
         )
         if not sync.get("success"):
             raise ApiError(f"MCP sync failed for {server['name']}: {sync.get('error')}")
+
+    # MCP tools use POST transport even when their business effect is read-only. Mark the
+    # imported data connectors explicitly so the supervised runtime does not conservatively
+    # treat them as writes and require approval.
+    discovered_tools = _index(
+        api.request("GET", api.query_path("/api/enterprise/tools", tenant_id=tenant_id)), "name"
+    )
+    read_only_names = {
+        f"{server['name']}.{leaf}"
+        for server in manifest["mcp_servers"]
+        for leaf in server["tool_names"]
+    }
+    for name in sorted(read_only_names):
+        row = discovered_tools.get(name)
+        if not row or row.get("effect_level") == "read":
+            continue
+        api.request(
+            "PUT",
+            f"/api/enterprise/tools/{row['id']}",
+            tool_update_payload(row, effect_level="read"),
+        )
+        report["updated"].setdefault("tool_effect_levels", []).append(name)
 
     existing_general = api.request(
         "GET", api.query_path("/api/enterprise/general-skills", tenant_id=tenant_id)

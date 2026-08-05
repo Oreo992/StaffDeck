@@ -110,7 +110,15 @@ class _SopActivatingHarness:
         tool_names = {tool.name for tool in request.tools}
         if "staffdeck.activate_sop" in tool_names:
             assert request.execute_tool is not None
-            result = request.execute_tool("staffdeck.activate_sop", {"skill_id": "graph_demo"})
+            activation_tool = next(tool for tool in request.tools if tool.name == "staffdeck.activate_sop")
+            assert "slots" in activation_tool.input_schema["properties"]
+            result = request.execute_tool(
+                "staffdeck.activate_sop",
+                {
+                    "skill_id": "graph_demo",
+                    "slots": {"request_type": "price", "product_name": "A1"},
+                },
+            )
             assert isinstance(result, dict) and result["success"] is True
             return HarnessRunResult(
                 session_id="agent-session-1",

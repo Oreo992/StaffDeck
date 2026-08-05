@@ -67,3 +67,21 @@ docker run --rm --network host --user 0:0 \
 Run without `--apply` first to get deterministic inventory counts and the manifest hash.
 External script-backed capabilities remain draft until an Agent Team-native tool adapter exists;
 the importer never copies source credentials into skill packages.
+
+To align the existing `QQQ · Claude` runtime variant with the `cc-amz` selection profile after
+an application update, inspect the plan and then apply it:
+
+```bash
+docker run --rm --network host --user 0:0 \
+  -v /data/staffdeck-preview/login-credentials.json:/run/secrets/login.json:ro \
+  staffdeck-preview:${STAFFDECK_IMAGE_TAG:-local} \
+  python -m app.qqq_claude_alignment --credential-file /run/secrets/login.json
+docker run --rm --network host --user 0:0 \
+  -v /data/staffdeck-preview/login-credentials.json:/run/secrets/login.json:ro \
+  staffdeck-preview:${STAFFDECK_IMAGE_TAG:-local} \
+  python -m app.qqq_claude_alignment --credential-file /run/secrets/login.json --apply
+```
+
+The alignment preserves QQQ's existing non-tool resources and model bindings, publishes the
+adaptive L1/L2/L3 research SOP, classifies the imported commerce connectors as read-only, and
+binds the complete SellerSprite/Sorftime tool profile.
