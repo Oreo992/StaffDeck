@@ -181,6 +181,25 @@ def _slot_has_value(slots: dict[str, Any], field: str) -> bool:
     return value is not None and value != "" and value != []
 
 
+def _user_defers_sop_execution(message: str) -> bool:
+    normalized = " ".join(message.lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "不要运行",
+            "不要执行",
+            "暂不运行",
+            "暂不执行",
+            "先不运行",
+            "先不执行",
+            "do not run",
+            "don't run",
+            "without executing",
+            "plan only",
+        )
+    )
+
+
 def _skill_expected_fields(skill: Skill) -> set[str]:
     content = skill.content_json or {}
     fields: set[str] = set()
@@ -1915,7 +1934,12 @@ class AgentLoop:
                         persona_prompt,
                         conversation_context,
                         user_message_id,
-                        claude_suggested_sop_id,
+                        suggested_sop_id=claude_suggested_sop_id,
+                        enforce_suggested_sop=bool(
+                            claude_suggested_sop_id
+                            and not _user_defers_sop_execution(request.message)
+                        ),
+                        suggested_sop_slots=router_decision.slot_hints,
                     )
                 reply = outcome.reply
                 step_result = outcome.step_result
@@ -2957,6 +2981,8 @@ class AgentLoop:
         conversation_context: dict[str, object],
         user_message_id: str,
         suggested_sop_id: str | None = None,
+        enforce_suggested_sop: bool = False,
+        suggested_sop_slots: dict[str, Any] | None = None,
     ) -> Iterator[dict[str, object]]:
         """Run Claude as an agent; it may request a validated transition into an SOP."""
         ui_config, model_config = self._claude_runtime_model_configuration(request.tenant_id)
@@ -3052,6 +3078,42 @@ class AgentLoop:
         requested_sop: Skill | None = None
         requested_sop_slots: dict[str, Any] = {}
 
+        def activation_slots_for(skill: Skill, proposed: dict[str, Any]) -> dict[str, Any]:
+            content = skill.content_json or {}
+            allowed_slot_names = _skill_expected_fields(skill)
+            policy = content.get("slot_filling_policy")
+            defaults = policy.get("optional_defaults") if isinstance(policy, dict) else {}
+            if isinstance(defaults, dict):
+                allowed_slot_names.update(str(key) for key in defaults)
+            aliases = {
+                "product_or_asin": ("asin", "product", "product_name"),
+                "research_depth": ("research_level", "depth"),
+            }
+            normalized_proposed = dict(proposed)
+            for target, source_names in aliases.items():
+                if target not in allowed_slot_names or _slot_has_value(normalized_proposed, target):
+                    continue
+                for source_name in source_names:
+                    if _slot_has_value(normalized_proposed, source_name):
+                        normalized_proposed[target] = normalized_proposed[source_name]
+                        break
+            current_slots = chat_session.slots_json or {}
+            return {
+                **(
+                    {key: value for key, value in defaults.items() if key in allowed_slot_names}
+                    if isinstance(defaults, dict)
+                    else {}
+                ),
+                **{
+                    key: value for key, value in current_slots.items() if key in allowed_slot_names
+                },
+                **{
+                    str(key): value
+                    for key, value in normalized_proposed.items()
+                    if str(key) in allowed_slot_names
+                },
+            }
+
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             nonlocal requested_sop, requested_sop_slots
             if tool_name == "staffdeck.activate_sop":
@@ -3062,36 +3124,17 @@ class AgentLoop:
                         "success": False,
                         "error": {"code": "NOT_ALLOWED", "message": "SOP 不可用。"},
                     }
-                content = requested_sop.content_json or {}
-                allowed_slot_names = _skill_expected_fields(requested_sop)
-                policy = content.get("slot_filling_policy")
-                defaults = policy.get("optional_defaults") if isinstance(policy, dict) else {}
-                if isinstance(defaults, dict):
-                    allowed_slot_names.update(str(key) for key in defaults)
                 proposed = arguments.get("slots")
                 proposed_slots = proposed if isinstance(proposed, dict) else {}
-                current_slots = chat_session.slots_json or {}
-                requested_sop_slots = {
-                    **(
-                        {
-                            key: value
-                            for key, value in defaults.items()
-                            if key in allowed_slot_names
-                        }
-                        if isinstance(defaults, dict)
-                        else {}
-                    ),
-                    **{
-                        key: value
-                        for key, value in current_slots.items()
-                        if key in allowed_slot_names
-                    },
-                    **{
-                        str(key): value
-                        for key, value in proposed_slots.items()
-                        if str(key) in allowed_slot_names
-                    },
-                }
+                activation_candidates = (
+                    dict(suggested_sop_slots or {})
+                    if requested_sop.skill_id == suggested_sop_id
+                    else {}
+                )
+                activation_candidates.update(proposed_slots)
+                requested_sop_slots = activation_slots_for(
+                    requested_sop, activation_candidates
+                )
                 return {
                     "tool_name": tool_name,
                     "success": True,
@@ -3225,6 +3268,28 @@ class AgentLoop:
         runtime_state["sdk_turns"] = int(runtime_state.get("sdk_turns") or 0) + run_result.num_turns
         runtime_state.pop("active_run_id", None)
 
+        activation_source = "claude"
+        if not requested_sop and enforce_suggested_sop and suggested_sop_id:
+            requested_sop = sop_by_id.get(suggested_sop_id)
+            if requested_sop:
+                activation_source = "router_supervisor"
+                requested_sop_slots = activation_slots_for(
+                    requested_sop, suggested_sop_slots or {}
+                )
+                self.events.record(
+                    request.tenant_id,
+                    chat_session.id,
+                    "claude_sop_activation_enforced",
+                    self._turn_payload(
+                        {
+                            "skill_id": requested_sop.skill_id,
+                            "reason": "router_selected_sop_not_activated",
+                        },
+                        user_message_id,
+                    ),
+                )
+                self.db.commit()
+
         if requested_sop:
             start_step_id = self._first_step_id(requested_sop)
             if not start_step_id:
@@ -3238,8 +3303,16 @@ class AgentLoop:
                         target_step_id=start_step_id,
                         slot_hints=requested_sop_slots,
                         confidence=1.0,
-                        user_intent="Claude 申请进入 SOP",
-                        reason="Claude 根据任务需要申请，平台已验证员工绑定和白名单。",
+                        user_intent=(
+                            "Claude 申请进入 SOP"
+                            if activation_source == "claude"
+                            else "Router 判定需要进入 SOP"
+                        ),
+                        reason=(
+                            "Claude 根据任务需要申请，平台已验证员工绑定和白名单。"
+                            if activation_source == "claude"
+                            else "Claude 未执行 Router 已选择的 SOP，监督层已接管激活。"
+                        ),
                         source_message=request.message,
                     ),
                 )
@@ -3259,7 +3332,7 @@ class AgentLoop:
                         {
                             "skill_id": requested_sop.skill_id,
                             "step_id": start_step_id,
-                            "source": "claude",
+                            "source": activation_source,
                         },
                         user_message_id,
                     ),
@@ -3269,11 +3342,15 @@ class AgentLoop:
                 yield self._stream_status(
                     chat_session,
                     "claude_supervised",
-                    f"Claude 已进入 SOP：{requested_sop.name}",
+                    (
+                        f"Claude 已进入 SOP：{requested_sop.name}"
+                        if activation_source == "claude"
+                        else f"StaffDeck 已按 Router 判定进入 SOP：{requested_sop.name}"
+                    ),
                     {
                         "active_skill_id": requested_sop.skill_id,
                         "active_step_id": start_step_id,
-                        "activation_source": "claude",
+                        "activation_source": activation_source,
                     },
                     user_message_id=user_message_id,
                 )

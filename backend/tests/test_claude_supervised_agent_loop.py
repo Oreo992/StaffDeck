@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from copy import deepcopy
 
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -22,8 +23,7 @@ from app.runtime.contracts import (
     HarnessStructuredOutput,
 )
 from app.security.encryption import encrypt_secret
-from app.session.session_schema import ChatTurnRequest
-from app.session.session_schema import RouterDecision
+from app.session.session_schema import ChatTurnRequest, RouterDecision, StepAgentResult
 from app.tools.tool_schema import ToolResult
 
 
@@ -550,6 +550,87 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         assert chat_session.active_step_id is None
         assert not any(
             event.event_type == "claude_sop_activated"
+            for event in db.exec(select(AgentEvent)).all()
+        )
+
+
+def test_router_selected_sop_is_enforced_when_claude_does_not_activate_it() -> None:
+    with _test_session() as db:
+        chat_session, skill_row, tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        chat_session.slots_json = {}
+        skill_content = deepcopy(skill_row.content_json)
+        skill_content["required_info"] = ["product_or_asin", "research_depth"]
+        skill_content["nodes"][0]["expected_user_info"] = [
+            "product_or_asin",
+            "research_depth",
+        ]
+        skill_content["nodes"][1]["expected_user_info"] = []
+        skill_row.content_json = skill_content
+        model = db.get(ModelConfig, "model_claude")
+        assert model is not None
+        model.is_default = True
+        db.add(model)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        loop.claude_runtime = _ConversationHarness()  # type: ignore[assignment]
+        loop._list_published_skills = lambda *args, **kwargs: [  # type: ignore[method-assign]
+            skill_row
+        ]
+        loop._list_enabled_tools = lambda *args, **kwargs: [tool]  # type: ignore[method-assign]
+        loop.router.decide = lambda *args, **kwargs: RouterDecision(  # type: ignore[method-assign]
+            decision="start_new_task",
+            target_skill_id="graph_demo",
+            target_step_id="collect",
+            confidence=0.99,
+            user_intent="按 L2 研究 A1",
+            reason="任务需要研究 SOP。",
+            source_message="按 L2 研究 A1",
+            slot_hints={"asin": "A1", "research_level": "L2"},
+        )
+        loop._pace_stream = lambda: None  # type: ignore[method-assign]
+        supervised_calls: list[tuple[str, dict[str, object]]] = []
+
+        def fake_supervised(  # noqa: ANN202
+            _request,
+            current_session,
+            active_skill,
+            _tools,
+            _persona_prompt,
+            _conversation_context,
+            _user_message_id,
+        ):
+            supervised_calls.append((active_skill.skill_id, dict(current_session.slots_json)))
+            if False:
+                yield {}
+            return ClaudeSupervisedOutcome(
+                reply="L2 研究完成",
+                step_result=StepAgentResult(action="reply", reply="L2 研究完成"),
+            )
+
+        loop._stream_claude_supervised_response = fake_supervised  # type: ignore[method-assign]
+
+        events = list(
+            loop.handle_turn_stream(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="按 L2 研究 A1",
+                )
+            )
+        )
+
+        complete = next(item for item in events if item["event"] == "complete")
+        assert complete["data"]["reply"] == "L2 研究完成"
+        assert supervised_calls == [
+            ("graph_demo", {"product_or_asin": "A1", "research_depth": "L2"})
+        ]
+        assert any(
+            event.event_type == "claude_sop_activation_enforced"
             for event in db.exec(select(AgentEvent)).all()
         )
 
