@@ -1327,6 +1327,16 @@ def apply_manifest(api: StaffDeckApi, manifest: dict[str, Any]) -> dict[str, Any
             f"/api/enterprise/agents/{row['id']}/resources",
             {"tenant_id": tenant_id, "resources": resources},
         )
+        for skill_id in agent["sop_skill_ids"]:
+            if skill_id not in sop_rows:
+                continue
+            api.request(
+                "POST",
+                api.query_path(
+                    f"/api/enterprise/agents/{row['id']}/skills/{skill_id}/sync-from-overall",
+                    tenant_id=tenant_id,
+                ),
+            )
         api.request(
             "PUT",
             f"/api/enterprise/agents/{row['id']}/models",

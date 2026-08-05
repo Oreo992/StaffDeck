@@ -174,6 +174,13 @@ def apply_alignment(api: StaffDeckApi) -> dict[str, Any]:
         f"/api/enterprise/agents/{agent['id']}/resources",
         {"tenant_id": api.tenant_id, "resources": resources},
     )
+    branch_sync = api.request(
+        "POST",
+        api.query_path(
+            f"/api/enterprise/agents/{agent['id']}/skills/{TARGET_SOP_ID}/sync-from-overall",
+            tenant_id=api.tenant_id,
+        ),
+    )
 
     ui_config = api.request(
         "GET", api.query_path("/api/enterprise/ui-config", tenant_id=api.tenant_id)
@@ -185,6 +192,7 @@ def apply_alignment(api: StaffDeckApi) -> dict[str, Any]:
         "bound_tools": len(TARGET_TOOL_NAMES) - len(inspection["missing_tools"]),
         "missing_tools": inspection["missing_tools"],
         "classified_read_only": len(inspection["tools_to_classify"]),
+        "branch_head_version": branch_sync["head_version"],
         "version": MIGRATION_VERSION,
     }
 
