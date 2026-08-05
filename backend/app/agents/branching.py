@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any, Iterable
 
 from sqlmodel import Session, select
@@ -37,6 +38,13 @@ STANDARD_CREATOR_METADATA_KEYS = (
     "created_by_display_name",
     "created_by_username",
 )
+
+
+def _datetime_sort_key(value: datetime) -> float:
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return normalized.timestamp()
+
+
 CREATOR_SOURCE_METADATA_KEYS = (
     "gallery_published_by",
     "owner_display_name",
@@ -402,7 +410,7 @@ def visible_skill_rows(
         if not include_inactive and branch.status != "active":
             continue
         rows.append(project_skill_with_branch(skill, branch, binding.status))
-    return sorted(rows, key=lambda item: item.updated_at, reverse=True)
+    return sorted(rows, key=lambda item: _datetime_sort_key(item.updated_at), reverse=True)
 
 
 def visible_published_skills(

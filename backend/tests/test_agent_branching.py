@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -279,6 +280,43 @@ def test_agent_skill_branch_is_copy_on_write_and_reports_branch_state() -> None:
         assert global_skill is not None
         assert global_skill.name == "购买流程"
         assert _skill_branch_read(branch_visible)["branch_sync_state"] == "diverged"
+
+
+def test_visible_skill_rows_sorts_mixed_naive_and_aware_branch_timestamps() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            AgentProfile(
+                id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True
+            )
+        )
+        agent = AgentProfile(
+            id="agent_branch", tenant_id="tenant_demo", name="客服分支", is_overall=False
+        )
+        db.add(agent)
+        for index in range(2):
+            skill = Skill(
+                tenant_id="tenant_demo",
+                skill_id=f"skill_{index}",
+                name=f"流程 {index}",
+                status="published",
+                content_json=_graph(f"流程 {index}", "1.0.0"),
+            )
+            db.add(skill)
+            db.flush()
+            ensure_open_gallery_binding(db, "tenant_demo", "skill", skill.id, "active")
+        db.commit()
+
+        copy_overall_scope_to_agent(db, "tenant_demo", agent)
+        branches = db.exec(
+            select(AgentSkillBranch).where(AgentSkillBranch.agent_id == agent.id)
+        ).all()
+        branches[0].updated_at = datetime(2026, 8, 5, 8, 0, tzinfo=UTC)
+        branches[1].updated_at = datetime(2026, 8, 5, 7, 0)
+
+        rows = visible_skill_rows(db, "tenant_demo", agent.id)
+
+        assert [row.skill_id for row in rows] == [branches[0].skill_id, branches[1].skill_id]
 
 
 def test_open_gallery_delete_skill_hides_gallery_without_removing_agent_binding() -> None:
