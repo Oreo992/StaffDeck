@@ -1,0 +1,55 @@
+{
+  "skill_profile": "agent-team:cc-amz",
+  "agent": "QQQ · Claude",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "你好，介绍一下你能做什么。",
+      "expected_skill_loads": [],
+      "reason": "普通问候不应加载专业技能。"
+    },
+    {
+      "id": 2,
+      "prompt": "帮我查一下 ASIN B0DTEST123 在美国站的基本表现。",
+      "expected_skill_loads": ["sellersprite"],
+      "reason": "单 ASIN Amazon 数据核验应加载 SellerSprite。"
+    },
+    {
+      "id": 3,
+      "prompt": "分析 portable blender 这个词的流量和竞争。",
+      "expected_skill_loads": ["sellersprite"],
+      "reason": "Amazon 关键词研究应加载 SellerSprite。"
+    },
+    {
+      "id": 4,
+      "prompt": "看看这个 Walmart productId 最近的趋势。",
+      "expected_skill_loads": ["sorftime"],
+      "reason": "Walmart 是 Sorftime 的直接使用场景。"
+    },
+    {
+      "id": 5,
+      "prompt": "对比这个商品在 TikTok 和 Amazon 的需求信号。",
+      "expected_skill_loads": ["sellersprite", "sorftime"],
+      "reason": "跨平台比较需要分别取得 Amazon 与 TikTok 证据。"
+    },
+    {
+      "id": 6,
+      "prompt": "给这三个 ASIN 做一份完整的竞品深度报告，并判断是否值得进入。",
+      "expected_skill_loads": ["deep-analysis", "sellersprite"],
+      "allowed_additional_skill_loads": ["sorftime"],
+      "reason": "明确完整报告应加载深度框架和 Amazon 主数据方法。"
+    },
+    {
+      "id": 7,
+      "prompt": "帮我把这段产品描述改得更自然。",
+      "expected_skill_loads": [],
+      "reason": "纯写作任务不需要研究技能。"
+    },
+    {
+      "id": 8,
+      "prompt": "只告诉我这个价格数字是什么意思，不要查新数据。",
+      "expected_skill_loads": [],
+      "reason": "用户明确不要外部查询时不应加载数据技能。"
+    }
+  ]
+}

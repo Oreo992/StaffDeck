@@ -2608,6 +2608,13 @@ class AgentLoop:
                 )
                 for tool in segment_tools
             ]
+            general_skills = self._list_published_general_skills(
+                request.tenant_id, chat_session.agent_id
+            )
+            general_skill_by_slug = {skill.slug: skill for skill in general_skills}
+            general_skill_tool = self._claude_general_skill_loader_tool(general_skills)
+            if general_skill_tool:
+                harness_tools.append(general_skill_tool)
             if visible_kb_ids:
                 harness_tools.append(
                     HarnessTool(
@@ -2623,9 +2630,19 @@ class AgentLoop:
                 )
 
             tool_by_name = {tool.name: tool for tool in segment_tools}
+            loaded_general_skill_slugs: set[str] = set()
 
             def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 nonlocal last_tool_result
+                if tool_name == "staffdeck.load_skill":
+                    return self._execute_claude_general_skill_load(
+                        general_skill_by_slug,
+                        arguments,
+                        request,
+                        chat_session,
+                        user_message_id,
+                        loaded_general_skill_slugs,
+                    )
                 if tool_name == "staffdeck.knowledge_search":
                     if not visible_kb_ids:
                         return {
@@ -3011,6 +3028,10 @@ class AgentLoop:
         visible_kb_ids = visible_knowledge_base_ids(
             self.db, request.tenant_id, chat_session.agent_id
         )
+        general_skills = self._list_published_general_skills(
+            request.tenant_id, chat_session.agent_id
+        )
+        general_skill_by_slug = {skill.slug: skill for skill in general_skills}
         harness_tools = [
             HarnessTool(
                 name=tool.name,
@@ -3020,6 +3041,9 @@ class AgentLoop:
             )
             for tool in read_tools
         ]
+        general_skill_tool = self._claude_general_skill_loader_tool(general_skills)
+        if general_skill_tool:
+            harness_tools.append(general_skill_tool)
         if visible_kb_ids:
             harness_tools.append(
                 HarnessTool(
@@ -3078,11 +3102,17 @@ class AgentLoop:
             harness_tools = [
                 tool
                 for tool in harness_tools
-                if tool.name in {"staffdeck.activate_sop", "staffdeck.knowledge_search"}
+                if tool.name
+                in {
+                    "staffdeck.activate_sop",
+                    "staffdeck.knowledge_search",
+                    "staffdeck.load_skill",
+                }
             ]
         tool_by_name = {tool.name: tool for tool in read_tools}
         requested_sop: Skill | None = None
         requested_sop_slots: dict[str, Any] = {}
+        loaded_general_skill_slugs: set[str] = set()
 
         def activation_slots_for(skill: Skill, proposed: dict[str, Any]) -> dict[str, Any]:
             content = skill.content_json or {}
@@ -3122,6 +3152,15 @@ class AgentLoop:
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             nonlocal requested_sop, requested_sop_slots
+            if tool_name == "staffdeck.load_skill":
+                return self._execute_claude_general_skill_load(
+                    general_skill_by_slug,
+                    arguments,
+                    request,
+                    chat_session,
+                    user_message_id,
+                    loaded_general_skill_slugs,
+                )
             if tool_name == "staffdeck.activate_sop":
                 requested_sop = sop_by_id.get(str(arguments.get("skill_id") or ""))
                 if not requested_sop:
@@ -3473,6 +3512,82 @@ class AgentLoop:
                     item.get("error"),
                 )
         return ledger
+
+    def _claude_general_skill_loader_tool(
+        self, general_skills: list[GeneralSkill]
+    ) -> HarnessTool | None:
+        if not general_skills:
+            return None
+        ordered = sorted(general_skills, key=lambda item: item.slug)
+        catalog = "\n".join(
+            f"- {item.slug}: {(item.description or item.name).strip()}" for item in ordered
+        )
+        return HarnessTool(
+            name="staffdeck.load_skill",
+            description=(
+                "按需加载当前数字员工已绑定的专业工作说明。先根据下面的名称和描述判断是否相关；"
+                "普通问候或无关任务不要加载。技能只提供方法，不授予额外工具权限，也不代表 SOP 已激活。\n"
+                f"可用技能：\n{catalog}"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "enum": [item.slug for item in ordered],
+                        "description": "要加载的技能 slug。",
+                    }
+                },
+                "required": ["slug"],
+                "additionalProperties": False,
+            },
+            effect_level=ToolEffectLevel.READ,
+        )
+
+    def _execute_claude_general_skill_load(
+        self,
+        general_skill_by_slug: dict[str, GeneralSkill],
+        arguments: dict[str, Any],
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        user_message_id: str,
+        loaded_slugs: set[str],
+    ) -> dict[str, Any]:
+        slug = str(arguments.get("slug") or "").strip()
+        skill = general_skill_by_slug.get(slug)
+        if not skill:
+            return {
+                "tool_name": "staffdeck.load_skill",
+                "success": False,
+                "error": {
+                    "code": "NOT_ALLOWED",
+                    "message": "技能未绑定、未发布或不在当前数字员工的可见范围内。",
+                },
+            }
+        if slug not in loaded_slugs:
+            loaded_slugs.add(slug)
+            self.events.record(
+                request.tenant_id,
+                chat_session.id,
+                "claude_skill_loaded",
+                self._turn_payload(
+                    {"slug": skill.slug, "name": skill.name}, user_message_id
+                ),
+            )
+            self.db.commit()
+        return {
+            "tool_name": "staffdeck.load_skill",
+            "success": True,
+            "data": {
+                "slug": skill.slug,
+                "name": skill.name,
+                "description": skill.description or "",
+                "skill_markdown": skill.skill_markdown,
+                "scope": "instructions_only",
+                "permissions_changed": False,
+                "sop_activated": False,
+            },
+        }
 
     def _claude_system_prompt(self, active_skill: Skill, persona_prompt: str | None) -> str:
         persona = (persona_prompt or "").strip()

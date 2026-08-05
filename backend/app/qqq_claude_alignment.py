@@ -16,6 +16,7 @@ from app.agent_team_migration import (
     _credentials,
     tool_update_payload,
 )
+from app.qqq_claude_skills import TARGET_GENERAL_SKILLS
 
 
 TARGET_AGENT_NAME = "QQQ · Claude"
@@ -133,6 +134,33 @@ def apply_alignment(api: StaffDeckApi) -> dict[str, Any]:
         {"tenant_id": api.tenant_id, "content": _target_sop_content(), "status": "published"},
     )
 
+    current_general_skills = api.request(
+        "GET",
+        api.query_path(
+            "/api/enterprise/general-skills",
+            tenant_id=api.tenant_id,
+            agent_id=agent["id"],
+        ),
+    )
+    general_skills_by_slug = {str(row.get("slug")): row for row in current_general_skills}
+    migrated_general_skills: list[dict[str, Any]] = []
+    for definition in TARGET_GENERAL_SKILLS:
+        slug = str(definition["slug"])
+        existing = general_skills_by_slug.get(slug)
+        payload = {
+            "tenant_id": api.tenant_id,
+            "agent_id": agent["id"],
+            "name": definition["name"],
+            "slug": slug,
+            "description": definition["description"],
+            "markdown": definition["markdown"],
+            "status": "published",
+        }
+        if existing:
+            payload["original_slug"] = slug
+        migrated = api.request("POST", "/api/enterprise/general-skills/import", payload)
+        migrated_general_skills.append(migrated)
+
     tools_by_name = inspection["tools_by_name"]
     for name in inspection["tools_to_classify"]:
         row = tools_by_name[name]
@@ -156,6 +184,24 @@ def apply_alignment(api: StaffDeckApi) -> dict[str, Any]:
         resources.append(
             {"resource_type": "skill", "resource_id": updated_skill["id"], "status": "active"}
         )
+    bound_resource_keys = {
+        (str(row.get("resource_type")), str(row.get("resource_id"))) for row in resources
+    }
+    for general_skill in migrated_general_skills:
+        key = ("general_skill", str(general_skill["id"]))
+        if key not in bound_resource_keys:
+            resources.append(
+                {
+                    "resource_type": "general_skill",
+                    "resource_id": general_skill["id"],
+                    "status": "active",
+                    "metadata": {
+                        "capability_profile_source": "agent-team:cc-amz",
+                        "capability_profile_version": MIGRATION_VERSION,
+                    },
+                }
+            )
+            bound_resource_keys.add(key)
     resources.extend(
         {
             "resource_type": "tool",
@@ -190,6 +236,7 @@ def apply_alignment(api: StaffDeckApi) -> dict[str, Any]:
         "agent_id": updated_agent["id"],
         "sop_id": TARGET_SOP_ID,
         "bound_tools": len(TARGET_TOOL_NAMES) - len(inspection["missing_tools"]),
+        "bound_general_skills": len(migrated_general_skills),
         "missing_tools": inspection["missing_tools"],
         "classified_read_only": len(inspection["tools_to_classify"]),
         "branch_head_version": branch_sync["head_version"],

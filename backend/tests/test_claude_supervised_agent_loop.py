@@ -10,6 +10,7 @@ from app.core.agent_loop import AgentLoop, ClaudeSupervisedOutcome
 from app.db.models import (
     AgentEvent,
     ChatSession,
+    GeneralSkill,
     HumanHandoffRequest,
     ModelConfig,
     Skill,
@@ -87,6 +88,61 @@ class _ConversationHarness:
         return HarnessRunResult(
             session_id=f"conversation-session-{turn}",
             output=HarnessStructuredOutput(reply=f"普通对话回复 {turn}"),
+            num_turns=1,
+        )
+
+    async def resume(
+        self, checkpoint_id: str, request: HarnessRunRequest
+    ) -> HarnessRunResult:
+        request.resume_session_id = checkpoint_id
+        return await self.run_segment(request)
+
+    def cancel(self, run_id: str) -> bool:
+        return False
+
+
+class _SkillLoadingHarness:
+    def __init__(self) -> None:
+        self.requests: list[HarnessRunRequest] = []
+        self.loaded: dict[str, object] | None = None
+        self.denied: dict[str, object] | None = None
+
+    async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
+        self.requests.append(request)
+        assert request.execute_tool is not None
+        self.loaded = request.execute_tool("staffdeck.load_skill", {"slug": "sellersprite"})
+        self.denied = request.execute_tool("staffdeck.load_skill", {"slug": "unbound"})
+        return HarnessRunResult(
+            session_id="skill-session-1",
+            output=HarnessStructuredOutput(reply="已按 SellerSprite 方法完成判断。"),
+            num_turns=2,
+        )
+
+    async def resume(
+        self, checkpoint_id: str, request: HarnessRunRequest
+    ) -> HarnessRunResult:
+        request.resume_session_id = checkpoint_id
+        return await self.run_segment(request)
+
+    def cancel(self, run_id: str) -> bool:
+        return False
+
+
+class _SkillOnlyHarness:
+    def __init__(self) -> None:
+        self.requests: list[HarnessRunRequest] = []
+
+    async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
+        self.requests.append(request)
+        assert request.execute_tool is not None
+        loaded = request.execute_tool("staffdeck.load_skill", {"slug": "sellersprite"})
+        assert isinstance(loaded, dict) and loaded["success"] is True
+        return HarnessRunResult(
+            session_id="skill-only-session",
+            output=HarnessStructuredOutput(
+                reply="我已阅读方法，但还没有取得业务证据。",
+                slot_updates={"request_type": "price"},
+            ),
             num_turns=1,
         )
 
@@ -386,6 +442,126 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert chat_session.slots_json == {"preserved": "value"}
+
+
+def test_claude_loads_only_bound_general_skill_on_demand_and_records_event() -> None:
+    with _test_session() as db:
+        chat_session, _skill_row, tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        general_skill = GeneralSkill(
+            id="genskill_sellersprite",
+            tenant_id="tenant_demo",
+            slug="sellersprite",
+            name="SellerSprite 亚马逊数据研究",
+            description="需要亚马逊市场、ASIN 或关键词数据时使用。",
+            skill_markdown="# SellerSprite\n\n只使用真实工具数据。",
+            status="published",
+        )
+        db.add(general_skill)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _SkillLoadingHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+        loop._list_published_general_skills = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
+            general_skill
+        ]
+
+        outcome = _consume_return(
+            loop._stream_claude_conversation_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="研究这个 ASIN",
+                ),
+                chat_session,
+                [_skill()],
+                [tool],
+                None,
+                {},
+                "turn_skill_load",
+            )
+        )
+
+        assert outcome.reply == "已按 SellerSprite 方法完成判断。"
+        assert {item.name for item in harness.requests[0].tools} == {
+            "product.price_query",
+            "staffdeck.activate_sop",
+            "staffdeck.load_skill",
+        }
+        assert harness.loaded is not None
+        assert harness.loaded["success"] is True
+        assert harness.loaded["data"]["skill_markdown"].startswith("# SellerSprite")
+        assert harness.denied is not None
+        assert harness.denied["success"] is False
+        assert harness.denied["error"]["code"] == "NOT_ALLOWED"
+        loaded_events = [
+            event
+            for event in db.exec(select(AgentEvent)).all()
+            if event.event_type == "claude_skill_loaded"
+        ]
+        assert len(loaded_events) == 1
+        assert loaded_events[0].payload_json["slug"] == "sellersprite"
+
+
+def test_loading_general_skill_does_not_count_as_sop_business_evidence() -> None:
+    with _test_session() as db:
+        chat_session, skill, tool = _seed_runtime(db)
+        ui_config = db.get(UIConfig, "tenant_demo")
+        assert ui_config is not None
+        ui_config.claude_max_repair_rounds = 0
+        general_skill = GeneralSkill(
+            id="genskill_sellersprite",
+            tenant_id="tenant_demo",
+            slug="sellersprite",
+            name="SellerSprite 亚马逊数据研究",
+            description="Amazon 数据研究方法。",
+            skill_markdown="# SellerSprite\n\n只使用真实工具数据。",
+            status="published",
+        )
+        db.add(ui_config)
+        db.add(general_skill)
+        db.commit()
+
+        loop = AgentLoop(db)
+        harness = _SkillOnlyHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+        loop._list_published_general_skills = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
+            general_skill
+        ]
+
+        _consume_return(
+            loop._stream_claude_supervised_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="查询 A1 价格",
+                ),
+                chat_session,
+                skill,
+                [tool],
+                None,
+                {},
+                "turn_skill_only",
+            )
+        )
+        db.refresh(chat_session)
+
+        assert {item.name for item in harness.requests[0].tools} == {
+            "product.price_query",
+            "staffdeck.load_skill",
+        }
+        assert chat_session.active_skill_id == "graph_demo"
+        assert chat_session.active_step_id == "collect"
+        assert chat_session.runtime_state_json["status"] == "failed"
+        assert any(
+            event.event_type == "claude_skill_loaded"
+            for event in db.exec(select(AgentEvent)).all()
+        )
 
 
 def test_claude_agent_can_request_and_complete_a_validated_sop_in_the_same_turn() -> None:
