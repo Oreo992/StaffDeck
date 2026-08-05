@@ -3053,8 +3053,8 @@ class AgentLoop:
                 HarnessTool(
                     name="staffdeck.activate_sop",
                     description=(
-                        "当任务确实需要固定流程时申请进入 SOP；把当前消息中已经明确的"
-                        "研究对象、站点和 L1/L2/L3 深度一并写入 slots。"
+                        "当任务确实需要固定流程时申请进入 SOP；把当前消息中已经明确的信息"
+                        "一并写入 slots，不要为了补齐可选字段追问用户。"
                     ),
                     input_schema={
                         "type": "object",
@@ -3074,6 +3074,12 @@ class AgentLoop:
                     effect_level=ToolEffectLevel.READ,
                 )
             )
+        if suggested_sop_id:
+            harness_tools = [
+                tool
+                for tool in harness_tools
+                if tool.name in {"staffdeck.activate_sop", "staffdeck.knowledge_search"}
+            ]
         tool_by_name = {tool.name: tool for tool in read_tools}
         requested_sop: Skill | None = None
         requested_sop_slots: dict[str, Any] = {}

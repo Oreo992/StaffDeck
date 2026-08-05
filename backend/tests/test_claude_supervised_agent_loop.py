@@ -537,9 +537,11 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
         assert harness.requests[0].max_turns == 3
         assert [tool.name for tool in harness.requests[0].tools] == [
-            "product.price_query",
             "staffdeck.activate_sop",
         ]
+        activation_tool = harness.requests[0].tools[0]
+        assert "L1/L2/L3" not in activation_tool.description
+        assert "当前消息中已经明确的信息" in activation_tool.description
         execute_tool = harness.requests[0].execute_tool
         assert execute_tool is not None
         denied = execute_tool("product.price_query", {"product_name": "A1"})
