@@ -65,6 +65,8 @@ def test_qqq_persona_is_clean_and_selection_first() -> None:
     assert "Amazon 运营与跨境选品 Agent" in QQQ_PERSONA_PROMPT
     assert "PPC 广告分析是次级能力" in QQQ_PERSONA_PROMPT
     assert "L1" in QQQ_PERSONA_PROMPT
+    assert "内部工作量参考" in QQQ_PERSONA_PROMPT
+    assert "不要求用户选择" in QQQ_PERSONA_PROMPT
     assert "EvidencePack" in QQQ_PERSONA_PROMPT
     assert "StaffDeck" not in QQQ_PERSONA_PROMPT
     assert "小卓" not in QQQ_PERSONA_PROMPT
@@ -81,7 +83,9 @@ def test_qqq_reuses_full_cc_amz_tool_profile_and_adaptive_sop() -> None:
     }
 
     assert len(TARGET_TOOL_NAMES) == 35
-    assert {"research_l1", "research_l2", "research_l3"}.issubset(node_ids)
+    assert "adaptive_research" in node_ids
+    assert {"research_l1", "research_l2", "research_l3"}.isdisjoint(node_ids)
+    assert "research_depth" not in content["slot_filling_policy"]["optional_defaults"]
     assert {f"call_tool:{name}" for name in TARGET_TOOL_NAMES} == serialized_actions
 
 

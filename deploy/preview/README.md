@@ -83,5 +83,6 @@ docker run --rm --network host --user 0:0 \
 ```
 
 The alignment preserves QQQ's existing non-tool resources and model bindings, publishes the
-adaptive L1/L2/L3 research SOP, classifies the imported commerce connectors as read-only, and
-binds the complete SellerSprite/Sorftime tool profile.
+Claude-planned adaptive research SOP, classifies the imported commerce connectors as read-only,
+and binds the complete SellerSprite/Sorftime tool profile. L1/L2/L3 remain internal workload
+guidance rather than user-facing slots or Graph branches.

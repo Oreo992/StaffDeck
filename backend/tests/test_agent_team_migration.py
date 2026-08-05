@@ -111,28 +111,32 @@ def test_migrated_persona_requires_real_html_link_and_non_blocking_defaults() ->
     assert "不可逆" in result
 
 
-def test_amazon_research_branches_by_depth_and_enforces_evidence_budgets() -> None:
+def test_amazon_research_lets_claude_choose_dimensions_inside_one_supervised_step() -> None:
     content = SOP_TEMPLATES["cc-amz"]
     nodes = {node["node_id"]: node for node in content["nodes"]}
     round_tripped = SkillCard.model_validate(content).model_dump(mode="json")
     round_trip_nodes = {node["node_id"]: node for node in round_tripped["nodes"]}
 
-    assert content["slot_filling_policy"]["optional_defaults"]["research_depth"] == "L2"
-    assert nodes["research_l1"]["metadata"]["evidence_policy"] == {
+    assert [node["node_id"] for node in content["nodes"]] == [
+        "collect_scope",
+        "adaptive_research",
+        "evidence_gate",
+        "reply",
+    ]
+    assert "research_depth" not in content["slot_filling_policy"]["optional_defaults"]
+    assert all("predicate_json" not in edge for edge in content["edges"])
+    assert nodes["adaptive_research"]["metadata"]["evidence_policy"] == {
         "min_successful_tools": 1
     }
-    assert nodes["research_l2"]["metadata"]["evidence_policy"] == {
-        "min_successful_tools": 2
+    assert round_trip_nodes["adaptive_research"]["metadata"]["evidence_policy"] == {
+        "min_successful_tools": 1
     }
-    assert nodes["research_l3"]["metadata"]["evidence_policy"] == {
-        "min_successful_tools": 4,
-        "min_tool_families": 2,
-    }
-    assert round_trip_nodes["research_l3"]["metadata"]["evidence_policy"] == {
-        "min_successful_tools": 4,
-        "min_tool_families": 2,
-    }
+    assert "自主判断任务规模" in nodes["adaptive_research"]["instruction"]
+    assert "自主选择" in nodes["adaptive_research"]["instruction"]
     serialized = json.dumps(content, ensure_ascii=False)
+    assert "research_l1" not in serialized
+    assert "research_l2" not in serialized
+    assert "research_l3" not in serialized
     for required_tool in (
         "at_sellersprite.keepa_info",
         "at_sorftime.category_report",

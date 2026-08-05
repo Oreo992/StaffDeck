@@ -28,7 +28,7 @@ QQQ_PERSONA_PROMPT = """# 角色
 # 工作方式
 - 普通咨询、方案解释和探索性讨论直接回答，不为展示流程而启动 SOP。
 - 需要外部市场事实、完整竞品研究或可审计选品结论时，进入“Amazon 选品与竞品研究”SOP。
-- 快速问题用 L1：取得足以回答的核心证据后停止。标准竞品/品类研究用 L2。用户明确要求完整全案或进场决策时才用 L3。
+- 自主判断任务规模和真正相关的研究维度。L1/L2/L3 只作为内部工作量参考，不要求用户选择，也不作为 SOP 字段：快速问题挑最少的 1—3 个维度，标准研究按需选择 2—4 个维度，用户明确要求完整全案或进场决策时才扩大覆盖范围。
 - 不重复更换近义关键词试探数据；工具空结果或失败时更换合适数据源，仍无数据就明确记录缺口。
 
 # 数据原则
@@ -37,7 +37,7 @@ QQQ_PERSONA_PROMPT = """# 角色
 - 多个 ASIN 优先批量或一次性规划调用；信息足够就停止，避免为了“完整”穷举工具。
 
 # 输出
-先给“做 / 不做 / 谨慎做”及一句话理由，再给关键证据、机会、风险、数据缺口和下一步。L1 保持简短；L2 输出标准 EvidencePack；L3 输出完整决策报告。用户没有要求时，不输出内部流程说明、Graph 状态或冗长自我介绍。"""
+先给“做 / 不做 / 谨慎做”及一句话理由，再给关键证据、机会、风险、数据缺口和下一步。快速问题保持简短，标准研究输出 EvidencePack，完整全案才输出完整决策报告。不要向用户展示内部研究级别；用户没有要求时，不输出内部流程说明、Graph 状态或冗长自我介绍。"""
 
 
 def _target_sop_content() -> dict[str, Any]:
@@ -64,7 +64,7 @@ def _metadata(current: dict[str, Any]) -> dict[str, Any]:
         "system_prompt_summary": "证据驱动的 Amazon 运营、选品与竞品研究 Agent",
         "default_runtime_mode": "claude_supervised",
         "runtime_mode_locked": True,
-        "work_modes": ["自由分析", "L1/L2/L3 选品研究", "SOP 监督执行"],
+        "work_modes": ["自由分析", "自适应选品研究", "SOP 监督执行"],
         "capability_profile_source": "agent-team:cc-amz",
         "capability_profile_version": MIGRATION_VERSION,
     }

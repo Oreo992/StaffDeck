@@ -17,7 +17,7 @@ import yaml
 
 TENANT_ID = "tenant_demo"
 MIGRATION_SOURCE = "agent-team"
-MIGRATION_VERSION = "1.1.0"
+MIGRATION_VERSION = "1.2.0"
 LEGACY_PATH_PATTERN = re.compile(r"(?:/opt/cc-base|\$HOME|~)/\.claude(?:/[A-Za-z0-9._${}/-]+)?")
 SECRET_JSON_PATTERN = re.compile(
     r'(?i)("[^"]*(?:secret|api[_-]?key|access[_-]?token|password)[^"]*"\s*:\s*)"[^"]*"'
@@ -264,40 +264,18 @@ def _amazon_research_sop() -> dict[str, Any]:
         _node(
             "collect_scope",
             "确认研究范围",
-            "识别产品、ASIN 或关键词。站点、深度和决策问题均为非关键信息；缺失时使用美国站、L2 和是否值得做，不得追问。",
+            "识别产品、ASIN 或关键词。站点和决策问题均为非关键信息；缺失时使用美国站和是否值得做，不得追问或要求用户选择研究级别。",
             expected=["product_or_asin"],
         ),
         {
             **_node(
-                "research_l1",
-                "L1 快速判断",
-                "调用最少的 SellerSprite、Keepa 或 Sorftime 工具取得一项足以支撑判断的真实证据后立即停止；总调用建议不超过 3 次。",
+                "adaptive_research",
+                "自适应研究",
+                "先根据用户目标自主判断任务规模，再自主选择真正相关的研究维度和工具。L1/L2/L3 只作为内部工作量参考，不是用户输入或流程分支：快速问题挑最少的 1—3 个维度，竞品或品类研究通常选择 2—4 个相关维度，只有明确要求完整全案时才尽量覆盖全部相关维度。优先使用最少调用取得足以支撑结论的真实证据；历史、评论或跨平台数据确有必要时再用 Keepa/Sorftime 补充。工具失败或空结果时换合适数据源，仍无数据就标注缺口；证据够用立即停止。",
                 node_type="tool_call",
                 actions=tool_actions,
             ),
             "metadata": {"evidence_policy": {"min_successful_tools": 1}},
-        },
-        {
-            **_node(
-                "research_l2",
-                "L2 标准研究",
-                "围绕市场、竞争、价格、痛点、流量和门槛按需选择 2—4 个维度；SellerSprite 为主，历史或评论不足时再用 Keepa/Sorftime，证据够用即停。",
-                node_type="tool_call",
-                actions=tool_actions,
-            ),
-            "metadata": {"evidence_policy": {"min_successful_tools": 2}},
-        },
-        {
-            **_node(
-                "research_l3",
-                "L3 完整选品",
-                "覆盖与决策相关的完整维度，至少使用两个数据源交叉验证；允许调用 SellerSprite 15 次、Keepa 6 次、Sorftime 10 次以内，缺失维度直接标注而非反复试错。",
-                node_type="tool_call",
-                actions=tool_actions,
-            ),
-            "metadata": {
-                "evidence_policy": {"min_successful_tools": 4, "min_tool_families": 2}
-            },
         },
         _node(
             "evidence_gate",
@@ -307,7 +285,7 @@ def _amazon_research_sop() -> dict[str, Any]:
         _node(
             "reply",
             "输出 EvidencePack",
-            "先给做/不做/谨慎做，再给关键证据、竞品或关键词机会、风险、数据缺口和下一步。L1 保持简短，L2 使用标准 EvidencePack，L3 给完整决策报告。",
+            "按用户目标和实际证据组织答案：先给做/不做/谨慎做，再给关键证据、机会、风险、数据缺口和下一步。快速问题保持简短，标准研究输出 EvidencePack，完整全案才输出完整决策报告；不要向用户展示内部研究级别。",
             node_type="response",
             actions=["answer_user"],
         ),
@@ -315,7 +293,7 @@ def _amazon_research_sop() -> dict[str, Any]:
     content = _linear_sop(
         "amazon-research",
         "Amazon 选品与竞品研究",
-        "按 L1/L2/L3 意图分档执行；只在任务需要可审计外部证据时进入，证据够用即止。",
+        "Claude 根据用户目标自主选择研究规模、维度和工具；只在任务需要可审计外部证据时进入，证据够用即止。",
         nodes,
         triggers=[
             "这个 ASIN 怎么样",
@@ -328,34 +306,9 @@ def _amazon_research_sop() -> dict[str, Any]:
         goals=["获得可追溯市场证据", "形成选品或竞品判断", "输出标准 EvidencePack"],
         optional_defaults={
             "marketplace": "Amazon 美国站",
-            "research_depth": "L2",
             "decision_question": "是否值得做以及主要风险",
         },
     )
-    content["edges"] = [
-        {
-            "source_node_id": "collect_scope",
-            "next_node_id": "research_l1",
-            "predicate_json": {"slot": "research_depth", "op": "eq", "value": "L1"},
-            "priority": 0,
-        },
-        {
-            "source_node_id": "collect_scope",
-            "next_node_id": "research_l3",
-            "predicate_json": {"slot": "research_depth", "op": "eq", "value": "L3"},
-            "priority": 1,
-        },
-        {
-            "source_node_id": "collect_scope",
-            "next_node_id": "research_l2",
-            "condition": "default",
-            "priority": 2,
-        },
-        {"source_node_id": "research_l1", "next_node_id": "evidence_gate"},
-        {"source_node_id": "research_l2", "next_node_id": "evidence_gate"},
-        {"source_node_id": "research_l3", "next_node_id": "evidence_gate"},
-        {"source_node_id": "evidence_gate", "next_node_id": "reply"},
-    ]
     return content
 
 
