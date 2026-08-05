@@ -1883,7 +1883,7 @@ class AgentLoop:
                     yield self._stream_status(
                         chat_session,
                         "claude_supervised",
-                        "Claude 正在执行受 StaffDeck 监督的 SOP",
+                        "Claude 正在执行受监督的 SOP",
                         {
                             "active_skill_id": chat_session.active_skill_id,
                             "active_step_id": chat_session.active_step_id,
@@ -2588,7 +2588,7 @@ class AgentLoop:
                 harness_tools.append(
                     HarnessTool(
                         name="staffdeck.knowledge_search",
-                        description="检索当前数字员工可见的 StaffDeck 知识库。",
+                        description="检索当前数字员工可见的知识库。",
                         input_schema={
                             "type": "object",
                             "properties": {"query": {"type": "string"}},
@@ -2656,7 +2656,7 @@ class AgentLoop:
                         "success": False,
                         "error": {
                             "code": "APPROVAL_REQUIRED",
-                            "message": "StaffDeck 尚未批准这个有副作用的工具调用。",
+                            "message": "流程监督器尚未批准这个有副作用的工具调用。",
                         },
                     }
                 tool_call = ToolCall(name=tool_name, arguments=arguments)
@@ -2701,7 +2701,7 @@ class AgentLoop:
                     yield self._stream_status(
                         chat_session,
                         "sop_repair",
-                        f"StaffDeck 正在要求 Claude 修复 SOP（{repair_attempt}/{max_repairs}）",
+                        f"正在要求 Claude 修复 SOP（{repair_attempt}/{max_repairs}）",
                         {"repair_attempt": repair_attempt},
                         user_message_id=user_message_id,
                     )
@@ -2998,7 +2998,7 @@ class AgentLoop:
             harness_tools.append(
                 HarnessTool(
                     name="staffdeck.knowledge_search",
-                    description="检索当前数字员工可见的 StaffDeck 知识库。",
+                    description="检索当前数字员工可见的知识库。",
                     input_schema={
                         "type": "object",
                         "properties": {"query": {"type": "string"}},
@@ -3011,7 +3011,7 @@ class AgentLoop:
             harness_tools.append(
                 HarnessTool(
                     name="staffdeck.activate_sop",
-                    description="当任务确实需要固定流程时，申请进入一个 StaffDeck SOP。",
+                    description="当任务确实需要固定流程时，申请进入一个 SOP。",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -3045,7 +3045,7 @@ class AgentLoop:
                         "skill_id": requested_sop.skill_id,
                         "status": "accepted",
                         "checkpoint_required": True,
-                        "instruction": "停止当前动作并返回；StaffDeck 将在下一执行段激活 SOP。",
+                        "instruction": "停止当前动作并返回；下一执行段将激活 SOP。",
                     },
                 }
             if tool_name == "staffdeck.knowledge_search":
@@ -3184,7 +3184,7 @@ class AgentLoop:
                         target_step_id=start_step_id,
                         confidence=1.0,
                         user_intent="Claude 申请进入 SOP",
-                        reason="Claude 根据任务需要申请，StaffDeck 已验证员工绑定和白名单。",
+                        reason="Claude 根据任务需要申请，平台已验证员工绑定和白名单。",
                         source_message=request.message,
                     ),
                 )
@@ -3338,14 +3338,15 @@ class AgentLoop:
 
     def _claude_system_prompt(self, active_skill: Skill, persona_prompt: str | None) -> str:
         persona = (persona_prompt or "").strip()
+        sop_name = str(active_skill.name or active_skill.skill_id).split("·", 1)[-1].strip()
         return "\n".join(
             item
             for item in [
                 persona,
-                "你在 StaffDeck 的 Claude Supervised Runtime 中工作。",
-                f"当前 SOP：{active_skill.name}（{active_skill.skill_id}）。",
+                "你正在执行一个已激活的固定流程。",
+                f"当前 SOP：{sop_name}（{active_skill.skill_id}）。",
                 "你可以在当前执行段内自主循环、检索知识并调用已提供工具。",
-                "StaffDeck 是步骤、权限和完成状态的唯一权威；不得声称未实际发生的工具调用。",
+                "流程监督器是步骤、权限和完成状态的唯一权威；不得声称未实际发生的工具调用。",
                 "不得自行标记 Graph 步骤完成，也不得把 next_step_id 当作权威状态。",
                 "只返回约定的结构化输出；reply 是审计通过后才会展示给用户的候选回答。",
             ]
@@ -3358,11 +3359,11 @@ class AgentLoop:
             item
             for item in [
                 persona,
-                "你是 StaffDeck 中可自主完成任务的 Claude Agent。",
-                "自然回答；需要信息时使用可见的只读工具。",
-                "只有任务确实需要固定流程时才申请进入 SOP，不要把普通对话变成流程执行。",
-                "StaffDeck 负责权限和流程状态；不要声称未发生的工具调用。",
-                "在 reply 中直接回答用户。",
+                "你是一个可自主完成任务的 Claude Agent。",
+                "自然回答；只有需要外部事实时才调用可见的只读工具，信息充分就直接作答。",
+                "只有任务确实需要可审计的固定步骤时才申请进入 SOP；咨询、方案说明和探索性分析保持自由执行。",
+                "工具结果和流程状态必须以实际记录为准，不得虚构。",
+                "直接回答用户。",
             ]
             if item
         )
@@ -3382,7 +3383,7 @@ class AgentLoop:
                 "available_sops": [
                     {
                         "skill_id": skill.skill_id,
-                        "name": skill.name,
+                        "name": str(skill.name or skill.skill_id).split("·", 1)[-1].strip(),
                         "description": (skill.content_json or {}).get("description", ""),
                         "goal": (skill.content_json or {}).get("goal", []),
                     }
@@ -3410,7 +3411,7 @@ class AgentLoop:
         repair_contract: dict[str, Any] | None,
     ) -> str:
         payload = {
-            "task": "执行当前 StaffDeck SOP 执行段并返回结构化结果",
+            "task": "执行当前 SOP 执行段并返回结构化结果",
             "user_message": request.message,
             "skill": {
                 "skill_id": active_skill.skill_id,
@@ -3430,7 +3431,7 @@ class AgentLoop:
             "rules": [
                 "只调用当前可见工具。",
                 "需要用户补充信息时设置 needs_user_input=true 并给出 user_question。",
-                "slot_updates 只是候选值，StaffDeck 会验证后提交。",
+                "slot_updates 只是候选值，流程监督器会验证后提交。",
                 "不要伪造 evidence_refs、工具结果或步骤完成状态。",
             ],
         }

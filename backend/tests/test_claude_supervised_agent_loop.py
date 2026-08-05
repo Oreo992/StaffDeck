@@ -372,6 +372,7 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
         assert all(item.execute_tool is not None for item in harness.requests)
         assert [tool.name for tool in harness.requests[0].tools] == ["product.price_query"]
         assert "可自主完成任务" in harness.requests[0].system_prompt
+        assert "StaffDeck" not in harness.requests[0].system_prompt
         assert chat_session.runtime_state_json["sdk_session_id"] == "conversation-session-2"
         assert chat_session.runtime_state_json["status"] == "completed"
         assert chat_session.active_skill_id is None
@@ -420,6 +421,7 @@ def test_claude_agent_can_request_and_complete_a_validated_sop_in_the_same_turn(
             "agent-session-2",
         ]
         assert harness.requests[0].max_turns == 12
+        assert all("StaffDeck" not in item.system_prompt for item in harness.requests)
         assert chat_session.runtime_state_json["activated_skill_id"] == "graph_demo"
         assert chat_session.runtime_state_json["sdk_session_id"] == "agent-session-3"
         assert chat_session.runtime_state_json["status"] == "completed"
