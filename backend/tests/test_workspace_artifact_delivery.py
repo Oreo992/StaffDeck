@@ -117,6 +117,7 @@ def test_claude_file_tool_persists_downloadable_message_artifact(monkeypatch, tm
         )
 
         assert result["success"] is True
+        assert "不要声称没有文件托管能力" in result["data"]["instruction"]
         assert artifacts[0]["display_name"] == "report.md"
         assert response.body.decode("utf-8").startswith("# 选品结论")
         assert response.headers["x-content-type-options"] == "nosniff"

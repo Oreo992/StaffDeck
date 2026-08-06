@@ -3560,7 +3560,8 @@ class AgentLoop:
             name="staffdeck.create_file",
             description=(
                 "创建要交付给用户下载的文本文件。仅在用户明确要求文件、HTML、CSV、JSON、"
-                "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。"
+                "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。调用成功后"
+                "StaffDeck 会提供下载入口，并为 HTML 请求追加公网链接；不要声称没有文件托管能力。"
             ),
             input_schema={
                 "type": "object",
@@ -3619,7 +3620,10 @@ class AgentLoop:
             "success": True,
             "data": {
                 "artifact": artifact,
-                "instruction": "文件已登记；在 reply 中简短说明即可。",
+                "instruction": (
+                    "文件已登记，StaffDeck 会提供下载入口；HTML 请求还会追加公网链接。"
+                    "在 reply 中简短说明即可，不要声称没有文件托管能力。"
+                ),
             },
         }
 
