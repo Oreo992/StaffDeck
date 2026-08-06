@@ -25,7 +25,7 @@ export const CARD_OUTLINE_BUTTON_CLASS = RETURN_BUTTON_CLASS;
 
 export const CHAT_CARD_CLASS = DISTILL_CARD_CLASS;
 export const CHAT_CARD_FULLSCREEN_CLASS =
-  'fixed! right-0! top-0! bottom-0! z-[130]! h-dvh! w-[min(440px,42vw)]! rounded-none! border-l! border-[#e3e7f1]! shadow-[-18px_0_42px_rgba(21,26,38,0.12)]! max-[900px]:w-full!';
+  'fixed! right-0! top-[58px]! bottom-0! z-[130]! h-[calc(100dvh-58px)]! w-[min(440px,42vw)]! rounded-none! border-l! border-[#e3e7f1]! shadow-[-18px_0_42px_rgba(21,26,38,0.12)]! max-[900px]:w-full!';
 export const CHAT_CARD_BODY_CLASS = DISTILL_CARD_BODY_CLASS;
 export const CHAT_CARD_DRAGGING_CLASS = 'ring-1 ring-[#18181a]/15';
 export const SOURCE_CARD_CLASS = DISTILL_CARD_CLASS;
