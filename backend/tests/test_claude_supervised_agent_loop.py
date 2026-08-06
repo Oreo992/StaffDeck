@@ -101,6 +101,44 @@ class _ConversationHarness:
         return False
 
 
+class _FilePublishingHarness:
+    def __init__(self) -> None:
+        self.requests: list[HarnessRunRequest] = []
+
+    async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
+        self.requests.append(request)
+        assert request.execute_tool is not None
+        created = request.execute_tool(
+            "staffdeck.create_file",
+            {
+                "filename": "report.html",
+                "content": "<!doctype html><html><body>verified</body></html>",
+                "content_type": "text/html; charset=utf-8",
+            },
+        )
+        assert isinstance(created, dict) and created["success"] is True
+        published = request.execute_tool(
+            "staffdeck.publish_html",
+            {"path": created["data"]["artifact"]["path"]},
+        )
+        assert isinstance(published, dict) and published["success"] is True
+        url = published["data"]["url"]
+        return HarnessRunResult(
+            session_id="file-session-1",
+            output=HarnessStructuredOutput(reply=f"文件已生成：[打开报告]({url})"),
+            num_turns=3,
+        )
+
+    async def resume(
+        self, checkpoint_id: str, request: HarnessRunRequest
+    ) -> HarnessRunResult:
+        request.resume_session_id = checkpoint_id
+        return await self.run_segment(request)
+
+    def cancel(self, run_id: str) -> bool:
+        return False
+
+
 class _SkillLoadingHarness:
     def __init__(self) -> None:
         self.requests: list[HarnessRunRequest] = []
@@ -442,6 +480,58 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert chat_session.slots_json == {"preserved": "value"}
+
+
+def test_claude_must_call_publish_html_and_return_the_tool_url(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
+
+    class FakePublisher:
+        enabled = True
+
+        def publish_document(self, document: str, _artifact_id: str) -> str:
+            assert document == "<!doctype html><html><body>verified</body></html>"
+            return "https://agent.neospark.cn/files/verified.html"
+
+    with _test_session() as db:
+        chat_session, _skill_row, _tool = _seed_runtime(db)
+        chat_session.active_skill_id = None
+        chat_session.active_step_id = None
+        ui_config = db.get(UIConfig, "tenant_demo")
+        assert ui_config is not None
+        ui_config.claude_skill_allowlist_json = []
+        db.add(ui_config)
+        db.add(chat_session)
+        db.commit()
+
+        loop = AgentLoop(db)
+        loop.html_artifacts = FakePublisher()  # type: ignore[assignment]
+        harness = _FilePublishingHarness()
+        loop.claude_runtime = harness  # type: ignore[assignment]
+
+        outcome = _consume_return(
+            loop._stream_claude_conversation_response(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    session_id=chat_session.id,
+                    user_id="user_demo",
+                    message="生成 HTML 文件，发布成公网链接发给我",
+                ),
+                chat_session,
+                [],
+                [],
+                None,
+                {},
+                "turn_file",
+            )
+        )
+
+        assert {tool.name for tool in harness.requests[0].tools} == {
+            "staffdeck.create_file",
+            "staffdeck.publish_html",
+        }
+        assert outcome.reply == (
+            "文件已生成：[打开报告](https://agent.neospark.cn/files/verified.html)"
+        )
 
 
 def test_claude_loads_only_bound_general_skill_on_demand_and_records_event() -> None:

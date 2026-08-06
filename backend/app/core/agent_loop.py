@@ -27,10 +27,10 @@ from app.artifacts.html_delivery import (
     HtmlArtifactPublisher,
     is_html_delivery_followup,
     is_html_delivery_request,
-    render_html_report,
 )
 from app.artifacts.workspace_delivery import (
     WorkspaceArtifactError,
+    normalize_artifact_path,
     publish_text_artifact,
     read_published_artifact,
 )
@@ -1965,13 +1965,6 @@ class AgentLoop:
                 reply = outcome.reply
                 step_result = outcome.step_result
                 tool_result = outcome.tool_result
-                if not active_skill or step_result.is_step_completed:
-                    reply = self._prepare_claude_artifact_delivery(
-                        request.message,
-                        chat_session,
-                        user_message_id,
-                        reply,
-                    )
                 if mark_current_turn_cancelled():
                     return
                 for chunk in self.response_generator.chunk_text(reply):
@@ -2644,7 +2637,9 @@ class AgentLoop:
             if general_skill_tool:
                 harness_tools.append(general_skill_tool)
             if _requests_file_delivery(request.message):
-                harness_tools.append(self._claude_create_file_tool())
+                harness_tools.extend(
+                    [self._claude_create_file_tool(), self._claude_publish_html_tool()]
+                )
             if visible_kb_ids:
                 harness_tools.append(
                     HarnessTool(
@@ -2666,6 +2661,10 @@ class AgentLoop:
                 nonlocal last_tool_result
                 if tool_name == "staffdeck.create_file":
                     return self._execute_claude_file_create(
+                        arguments, request, chat_session, user_message_id
+                    )
+                if tool_name == "staffdeck.publish_html":
+                    return self._execute_claude_html_publish(
                         arguments, request, chat_session, user_message_id
                     )
                 if tool_name == "staffdeck.load_skill":
@@ -3079,7 +3078,9 @@ class AgentLoop:
         if general_skill_tool:
             harness_tools.append(general_skill_tool)
         if _requests_file_delivery(request.message):
-            harness_tools.append(self._claude_create_file_tool())
+            harness_tools.extend(
+                [self._claude_create_file_tool(), self._claude_publish_html_tool()]
+            )
         if visible_kb_ids:
             harness_tools.append(
                 HarnessTool(
@@ -3142,6 +3143,7 @@ class AgentLoop:
                 in {
                     "staffdeck.activate_sop",
                     "staffdeck.create_file",
+                    "staffdeck.publish_html",
                     "staffdeck.knowledge_search",
                     "staffdeck.load_skill",
                 }
@@ -3191,6 +3193,10 @@ class AgentLoop:
             nonlocal requested_sop, requested_sop_slots
             if tool_name == "staffdeck.create_file":
                 return self._execute_claude_file_create(
+                    arguments, request, chat_session, user_message_id
+                )
+            if tool_name == "staffdeck.publish_html":
+                return self._execute_claude_html_publish(
                     arguments, request, chat_session, user_message_id
                 )
             if tool_name == "staffdeck.load_skill":
@@ -3561,7 +3567,8 @@ class AgentLoop:
             description=(
                 "创建要交付给用户下载的文本文件。仅在用户明确要求文件、HTML、CSV、JSON、"
                 "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。调用成功后"
-                "StaffDeck 会提供下载入口，并为 HTML 请求追加公网链接；不要声称没有文件托管能力。"
+                "StaffDeck 会提供下载入口。创建文件不会自动发布公网链接；用户要求 HTML 公网链接时，"
+                "还必须主动调用 staffdeck.publish_html。"
             ),
             input_schema={
                 "type": "object",
@@ -3621,9 +3628,122 @@ class AgentLoop:
             "data": {
                 "artifact": artifact,
                 "instruction": (
-                    "文件已登记，StaffDeck 会提供下载入口；HTML 请求还会追加公网链接。"
-                    "在 reply 中简短说明即可，不要声称没有文件托管能力。"
+                    "文件已登记，StaffDeck 会提供下载入口。在 reply 中简短说明即可。"
                 ),
+            },
+        }
+
+    @staticmethod
+    def _claude_publish_html_tool() -> HarnessTool:
+        return HarnessTool(
+            name="staffdeck.publish_html",
+            description=(
+                "将本轮通过 staffdeck.create_file 创建的 HTML 文件发布为公网链接。"
+                "只有用户要求公网链接时才调用；成功后必须把返回的 url 告诉用户。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            effect_level=ToolEffectLevel.WRITE,
+        )
+
+    def _execute_claude_html_publish(
+        self,
+        arguments: dict[str, Any],
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        user_message_id: str,
+    ) -> dict[str, Any]:
+        tool_name = "staffdeck.publish_html"
+        try:
+            requested_path = normalize_artifact_path(str(arguments.get("path") or ""))
+        except WorkspaceArtifactError as exc:
+            return {
+                "tool_name": tool_name,
+                "success": False,
+                "error": {"code": "INVALID_ARTIFACT_PATH", "message": str(exc)},
+            }
+        artifact = next(
+            (
+                item
+                for item in reversed(self._pending_assistant_artifacts.get(chat_session.id, []))
+                if str(item.get("task_frame_id") or "") == user_message_id
+                and str(item.get("path") or "") == requested_path
+            ),
+            None,
+        )
+        if artifact is None:
+            return {
+                "tool_name": tool_name,
+                "success": False,
+                "error": {
+                    "code": "ARTIFACT_NOT_FOUND",
+                    "message": "只能发布本轮通过 staffdeck.create_file 创建的文件。",
+                },
+            }
+        if not requested_path.lower().endswith((".html", ".htm")):
+            return {
+                "tool_name": tool_name,
+                "success": False,
+                "error": {"code": "HTML_REQUIRED", "message": "公网发布目前只支持 HTML 文件。"},
+            }
+        try:
+            data, _filename, media_type = read_published_artifact(
+                tenant_id=request.tenant_id,
+                session_id=chat_session.id,
+                task_frame_id=user_message_id,
+                artifact=artifact,
+            )
+            if not media_type.lower().startswith("text/html"):
+                raise WorkspaceArtifactError("Artifact content type must be text/html.")
+            document = data.decode("utf-8")
+            artifact_id = f"{chat_session.id}-{new_id('artifact')}"
+            url = self.html_artifacts.publish_document(document, artifact_id)
+        except (WorkspaceArtifactError, OSError, UnicodeDecodeError) as exc:
+            self.events.record(
+                request.tenant_id,
+                chat_session.id,
+                "html_artifact_publish_failed",
+                self._turn_payload({"error_type": type(exc).__name__}, user_message_id),
+            )
+            self.db.commit()
+            return {
+                "tool_name": tool_name,
+                "success": False,
+                "error": {"code": "ARTIFACT_REJECTED", "message": str(exc)},
+            }
+        except Exception as exc:
+            self.events.record(
+                request.tenant_id,
+                chat_session.id,
+                "html_artifact_publish_failed",
+                self._turn_payload({"error_type": type(exc).__name__}, user_message_id),
+            )
+            self.db.commit()
+            return {
+                "tool_name": tool_name,
+                "success": False,
+                "error": {"code": "PUBLICATION_FAILED", "message": "HTML 公网发布失败。"},
+            }
+        self.events.record(
+            request.tenant_id,
+            chat_session.id,
+            "html_artifact_published",
+            self._turn_payload(
+                {"url": url, "artifact_path": requested_path}, user_message_id
+            ),
+        )
+        self.db.commit()
+        return {
+            "tool_name": tool_name,
+            "success": True,
+            "data": {
+                "url": url,
+                "artifact": artifact,
+                "instruction": "把 url 作为可点击的公网链接返回给用户。",
             },
         }
 
@@ -4493,86 +4613,6 @@ class AgentLoop:
             {"url": url},
         )
         return f"{reply.rstrip()}\n\nHTML 报告公网链接：[打开 HTML 报告]({url})"
-
-    def _prepare_claude_artifact_delivery(
-        self,
-        message: str,
-        chat_session: ChatSession,
-        user_message_id: str,
-        reply: str,
-    ) -> str:
-        delivery_message, request_message_id = self._html_delivery_request_context(
-            message, chat_session
-        )
-        if delivery_message:
-            pending = self._pending_assistant_artifacts.setdefault(chat_session.id, [])
-            html_artifact = next(
-                (
-                    item
-                    for item in reversed(pending)
-                    if str(item.get("path") or "").lower().endswith((".html", ".htm"))
-                    and str(item.get("task_frame_id") or "") == user_message_id
-                ),
-                None,
-            )
-            html_document: str | None = None
-            if html_artifact is not None:
-                try:
-                    data, _filename, _media_type = read_published_artifact(
-                        tenant_id=chat_session.tenant_id,
-                        session_id=chat_session.id,
-                        task_frame_id=user_message_id,
-                        artifact=html_artifact,
-                    )
-                    html_document = data.decode("utf-8")
-                except (WorkspaceArtifactError, OSError, UnicodeDecodeError):
-                    html_artifact = None
-            if html_artifact is None:
-                try:
-                    title = str(chat_session.title or "Agent Team 报告").strip()
-                    tool_results = self._html_artifact_tool_results(
-                        chat_session, request_message_id=request_message_id
-                    )
-                    document = render_html_report(
-                        title,
-                        reply,
-                        delivery_message,
-                        tool_results=tool_results,
-                    )
-                    artifact = publish_text_artifact(
-                        tenant_id=chat_session.tenant_id,
-                        session_id=chat_session.id,
-                        task_frame_id=user_message_id,
-                        filename="agent-report.html",
-                        content=document,
-                        description="HTML 报告",
-                        content_type="text/html; charset=utf-8",
-                    )
-                    pending.append(artifact)
-                    html_document = document
-                    self.events.record(
-                        chat_session.tenant_id,
-                        chat_session.id,
-                        "harness_artifact_published",
-                        self._turn_payload({"artifact": artifact}, user_message_id),
-                    )
-                    self.db.commit()
-                except (WorkspaceArtifactError, OSError) as exc:
-                    self.events.record(
-                        chat_session.tenant_id,
-                        chat_session.id,
-                        "harness_artifact_publish_failed",
-                        self._turn_payload(
-                            {"error_type": type(exc).__name__}, user_message_id
-                        ),
-                    )
-                    self.db.commit()
-        return self._with_html_artifact(
-            message,
-            chat_session,
-            reply,
-            html_document=html_document if delivery_message else None,
-        )
 
     def _html_delivery_request_context(
         self, message: str, chat_session: ChatSession
