@@ -278,6 +278,41 @@ def test_publisher_uploads_html_and_returns_validated_public_url(monkeypatch) ->
     assert content_type.startswith("text/html")
 
 
+def test_publisher_uploads_existing_html_without_wrapping(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, *args):  # noqa: ANN002, ANN204
+            return None
+
+        def post(self, url, files):  # noqa: ANN001
+            captured["files"] = files
+            return httpx.Response(
+                200,
+                json={"url": "https://agent.neospark.cn/files/existing.html"},
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    publisher = HtmlArtifactPublisher(
+        upload_url="http://host.docker.internal:9900/api/upload",
+        public_url_prefix="https://agent.neospark.cn/files/",
+    )
+    document = "<!doctype html><html><body>完整原始报告</body></html>"
+
+    url = publisher.publish_document(document, "session-existing")
+
+    assert url.endswith("existing.html")
+    _filename, body, _content_type = captured["files"]["file"]  # type: ignore[index]
+    assert body.decode("utf-8") == document
+
+
 def test_publisher_rejects_unexpected_public_url(monkeypatch) -> None:
     class FakeClient:
         def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003

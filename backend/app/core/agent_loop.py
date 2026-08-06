@@ -29,7 +29,11 @@ from app.artifacts.html_delivery import (
     is_html_delivery_request,
     render_html_report,
 )
-from app.artifacts.workspace_delivery import WorkspaceArtifactError, publish_text_artifact
+from app.artifacts.workspace_delivery import (
+    WorkspaceArtifactError,
+    publish_text_artifact,
+    read_published_artifact,
+)
 from app.core.conversation_context import build_conversation_context
 from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancelled
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
@@ -4437,7 +4441,12 @@ class AgentLoop:
             yield delivered[len(reply) :]
 
     def _with_html_artifact(
-        self, message: str, chat_session: ChatSession, reply: str
+        self,
+        message: str,
+        chat_session: ChatSession,
+        reply: str,
+        *,
+        html_document: str | None = None,
     ) -> str:
         delivery_message, request_message_id = self._html_delivery_request_context(
             message, chat_session
@@ -4455,13 +4464,16 @@ class AgentLoop:
             chat_session, request_message_id=request_message_id
         )
         try:
-            url = self.html_artifacts.publish(
-                title,
-                reply,
-                artifact_id,
-                message=delivery_message,
-                tool_results=tool_results,
-            )
+            if html_document is None:
+                url = self.html_artifacts.publish(
+                    title,
+                    reply,
+                    artifact_id,
+                    message=delivery_message,
+                    tool_results=tool_results,
+                )
+            else:
+                url = self.html_artifacts.publish_document(html_document, artifact_id)
         except Exception as exc:
             self.events.record(
                 chat_session.tenant_id,
@@ -4490,12 +4502,27 @@ class AgentLoop:
         )
         if delivery_message:
             pending = self._pending_assistant_artifacts.setdefault(chat_session.id, [])
-            already_has_html = any(
-                str(item.get("path") or "").lower().endswith((".html", ".htm"))
-                and str(item.get("task_frame_id") or "") == user_message_id
-                for item in pending
+            html_artifact = next(
+                (
+                    item
+                    for item in reversed(pending)
+                    if str(item.get("path") or "").lower().endswith((".html", ".htm"))
+                    and str(item.get("task_frame_id") or "") == user_message_id
+                ),
+                None,
             )
-            if not already_has_html:
+            html_document: str | None = None
+            if html_artifact is not None:
+                try:
+                    data, _filename, _media_type = read_published_artifact(
+                        tenant_id=chat_session.tenant_id,
+                        session_id=chat_session.id,
+                        metadata=html_artifact,
+                    )
+                    html_document = data.decode("utf-8")
+                except (WorkspaceArtifactError, OSError, UnicodeDecodeError):
+                    html_artifact = None
+            if html_artifact is None:
                 try:
                     title = str(chat_session.title or "Agent Team 报告").strip()
                     tool_results = self._html_artifact_tool_results(
@@ -4517,6 +4544,7 @@ class AgentLoop:
                         content_type="text/html; charset=utf-8",
                     )
                     pending.append(artifact)
+                    html_document = document
                     self.events.record(
                         chat_session.tenant_id,
                         chat_session.id,
@@ -4534,7 +4562,12 @@ class AgentLoop:
                         ),
                     )
                     self.db.commit()
-        return self._with_html_artifact(message, chat_session, reply)
+        return self._with_html_artifact(
+            message,
+            chat_session,
+            reply,
+            html_document=html_document if delivery_message else None,
+        )
 
     def _html_delivery_request_context(
         self, message: str, chat_session: ChatSession

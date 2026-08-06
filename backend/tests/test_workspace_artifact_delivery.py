@@ -158,7 +158,13 @@ def test_claude_html_delivery_creates_download_and_verified_public_link(
         enabled = True
         public_url_prefix = "https://agent.neospark.cn/files/"
 
+        published_document = ""
+
         def publish(self, *_args, **_kwargs) -> str:
+            return "https://agent.neospark.cn/files/report.html"
+
+        def publish_document(self, document: str, _artifact_id: str) -> str:
+            self.published_document = document
             return "https://agent.neospark.cn/files/report.html"
 
     with _test_session() as db:
@@ -184,3 +190,4 @@ def test_claude_html_delivery_creates_download_and_verified_public_link(
         assert _requests_file_delivery("把报告转成 HTML 文件发给我") is True
         assert "https://agent.neospark.cn/files/report.html" in reply
         assert assistant.metadata_json["harness_artifacts"][0]["path"] == "agent-report.html"
+        assert "核心结论：建议继续验证市场容量。" in loop.html_artifacts.published_document

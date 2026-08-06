@@ -270,20 +270,25 @@ class HtmlArtifactPublisher:
         message: str = "",
         tool_results: list[dict[str, Any]] | None = None,
     ) -> str:
-        if not self.enabled:
-            raise RuntimeError("HTML artifact publishing is not configured")
-        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", artifact_id).strip("-")[-48:]
-        filename = f"agent-team-{safe_id or 'report'}.html"
         document = render_html_report(
             title,
             content,
             message,
             tool_results=tool_results,
-        ).encode("utf-8")
+        )
+        return self.publish_document(document, artifact_id)
+
+    def publish_document(self, document: str, artifact_id: str) -> str:
+        """Publish an already-built HTML document without wrapping it again."""
+        if not self.enabled:
+            raise RuntimeError("HTML artifact publishing is not configured")
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", artifact_id).strip("-")[-48:]
+        filename = f"agent-team-{safe_id or 'report'}.html"
+        body = str(document).encode("utf-8")
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.post(
                 self.upload_url,
-                files={"file": (filename, document, "text/html; charset=utf-8")},
+                files={"file": (filename, body, "text/html; charset=utf-8")},
             )
             response.raise_for_status()
         payload = response.json()
