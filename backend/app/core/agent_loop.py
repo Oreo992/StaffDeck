@@ -4517,7 +4517,8 @@ class AgentLoop:
                     data, _filename, _media_type = read_published_artifact(
                         tenant_id=chat_session.tenant_id,
                         session_id=chat_session.id,
-                        metadata=html_artifact,
+                        task_frame_id=user_message_id,
+                        artifact=html_artifact,
                     )
                     html_document = data.decode("utf-8")
                 except (WorkspaceArtifactError, OSError, UnicodeDecodeError):

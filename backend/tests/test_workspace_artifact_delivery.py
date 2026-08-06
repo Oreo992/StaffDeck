@@ -191,3 +191,42 @@ def test_claude_html_delivery_creates_download_and_verified_public_link(
         assert "https://agent.neospark.cn/files/report.html" in reply
         assert assistant.metadata_json["harness_artifacts"][0]["path"] == "agent-report.html"
         assert "核心结论：建议继续验证市场容量。" in loop.html_artifacts.published_document
+
+
+def test_claude_html_delivery_publishes_the_existing_workspace_document(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
+
+    class FakePublisher:
+        enabled = True
+        published_document = ""
+
+        def publish_document(self, document: str, _artifact_id: str) -> str:
+            self.published_document = document
+            return "https://agent.neospark.cn/files/existing.html"
+
+    with _test_session() as db:
+        _user, chat_session = _seed(db)
+        loop = AgentLoop(db)
+        loop.html_artifacts = FakePublisher()  # type: ignore[assignment]
+        document = "<!doctype html><html><body>产品画像 销量与趋势 竞争格局</body></html>"
+        artifact = publish_text_artifact(
+            tenant_id="tenant_demo",
+            session_id=chat_session.id,
+            task_frame_id="turn_existing",
+            filename="report.html",
+            content=document,
+            content_type="text/html; charset=utf-8",
+        )
+        loop._pending_assistant_artifacts[chat_session.id] = [artifact]
+
+        reply = loop._prepare_claude_artifact_delivery(
+            "生成 HTML 文件和公网链接",
+            chat_session,
+            "turn_existing",
+            "文件已生成。",
+        )
+
+        assert "https://agent.neospark.cn/files/existing.html" in reply
+        assert loop.html_artifacts.published_document == document
