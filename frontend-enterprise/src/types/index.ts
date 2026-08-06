@@ -525,6 +525,27 @@ export type KnowledgeCitation = {
   concept_type?: string;
 };
 
+export type HarnessWorkspaceArtifact = {
+  type: 'workspace_file';
+  task_frame_id: string;
+  path: string;
+  sha256?: string | null;
+  size?: number | null;
+  display_name?: string | null;
+  description?: string | null;
+  content_type?: string | null;
+  operation?: string | null;
+  source?: string | null;
+};
+
+export type HarnessArtifact =
+  | HarnessWorkspaceArtifact
+  | {
+      type: 'human_handoff' | string;
+      handoff_id?: string | null;
+      [key: string]: unknown;
+    };
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -533,6 +554,7 @@ export type ChatMessage = {
     attachments?: ChatAttachmentRead[];
     knowledge_citations?: KnowledgeCitation[];
     knowledge_query?: Record<string, unknown>;
+    harness_artifacts?: HarnessArtifact[];
     [key: string]: unknown;
   };
   created_at: string;

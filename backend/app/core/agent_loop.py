@@ -27,7 +27,9 @@ from app.artifacts.html_delivery import (
     HtmlArtifactPublisher,
     is_html_delivery_followup,
     is_html_delivery_request,
+    render_html_report,
 )
+from app.artifacts.workspace_delivery import WorkspaceArtifactError, publish_text_artifact
 from app.core.conversation_context import build_conversation_context
 from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancelled
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
@@ -109,6 +111,12 @@ GENERAL_SKILL_TOOL_PREFIX = "general_skill."
 CANCELLED_ASSISTANT_REPLY = "已停止生成"
 IDEMPOTENT_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ERROR_TRACEBACK_CHAR_LIMIT = 6000
+FILE_DELIVERY_REQUEST = re.compile(
+    r"(?i)(?:生成|转成|转换|导出|下载|发我|给我|作为).{0,16}"
+    r"(?:文件|附件|HTML|网页|网址|CSV|JSON|Markdown|MD|TXT)|"
+    r"(?:文件|附件|HTML|网页|网址|CSV|JSON|Markdown|MD|TXT).{0,16}"
+    r"(?:生成|转成|转换|导出|下载|发我|给我)"
+)
 AGENT_PERSONA_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
     ("role_name", "岗位"),
     ("position", "岗位"),
@@ -123,6 +131,14 @@ AGENT_PERSONA_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 ExecutionFinalizeState = Literal["continued", "completed", "handoff"]
+
+
+def _requests_file_delivery(message: str) -> bool:
+    return bool(
+        FILE_DELIVERY_REQUEST.search(str(message or ""))
+        or is_html_delivery_request(message)
+        or is_html_delivery_followup(message)
+    )
 
 
 def _agent_identity_prompt(agent: AgentProfile) -> str:
@@ -304,6 +320,7 @@ class AgentLoop:
         self.claude_runtime = ClaudeAgentSdkAdapter()
         self.sop_supervisor = SopSupervisor()
         self._validated_general_skill_calls: set[tuple[str, str, str]] = set()
+        self._pending_assistant_artifacts: dict[str, list[dict[str, Any]]] = {}
 
     def _turn_payload(self, payload: dict[str, Any], user_message_id: str | None) -> dict[str, Any]:
         data = dict(payload)
@@ -1944,6 +1961,13 @@ class AgentLoop:
                 reply = outcome.reply
                 step_result = outcome.step_result
                 tool_result = outcome.tool_result
+                if not active_skill or step_result.is_step_completed:
+                    reply = self._prepare_claude_artifact_delivery(
+                        request.message,
+                        chat_session,
+                        user_message_id,
+                        reply,
+                    )
                 if mark_current_turn_cancelled():
                     return
                 for chunk in self.response_generator.chunk_text(reply):
@@ -2615,6 +2639,8 @@ class AgentLoop:
             general_skill_tool = self._claude_general_skill_loader_tool(general_skills)
             if general_skill_tool:
                 harness_tools.append(general_skill_tool)
+            if _requests_file_delivery(request.message):
+                harness_tools.append(self._claude_create_file_tool())
             if visible_kb_ids:
                 harness_tools.append(
                     HarnessTool(
@@ -2634,6 +2660,10 @@ class AgentLoop:
 
             def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 nonlocal last_tool_result
+                if tool_name == "staffdeck.create_file":
+                    return self._execute_claude_file_create(
+                        arguments, request, chat_session, user_message_id
+                    )
                 if tool_name == "staffdeck.load_skill":
                     return self._execute_claude_general_skill_load(
                         general_skill_by_slug,
@@ -3044,6 +3074,8 @@ class AgentLoop:
         general_skill_tool = self._claude_general_skill_loader_tool(general_skills)
         if general_skill_tool:
             harness_tools.append(general_skill_tool)
+        if _requests_file_delivery(request.message):
+            harness_tools.append(self._claude_create_file_tool())
         if visible_kb_ids:
             harness_tools.append(
                 HarnessTool(
@@ -3105,6 +3137,7 @@ class AgentLoop:
                 if tool.name
                 in {
                     "staffdeck.activate_sop",
+                    "staffdeck.create_file",
                     "staffdeck.knowledge_search",
                     "staffdeck.load_skill",
                 }
@@ -3152,6 +3185,10 @@ class AgentLoop:
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             nonlocal requested_sop, requested_sop_slots
+            if tool_name == "staffdeck.create_file":
+                return self._execute_claude_file_create(
+                    arguments, request, chat_session, user_message_id
+                )
             if tool_name == "staffdeck.load_skill":
                 return self._execute_claude_general_skill_load(
                     general_skill_by_slug,
@@ -3512,6 +3549,75 @@ class AgentLoop:
                     item.get("error"),
                 )
         return ledger
+
+    @staticmethod
+    def _claude_create_file_tool() -> HarnessTool:
+        return HarnessTool(
+            name="staffdeck.create_file",
+            description=(
+                "创建要交付给用户下载的文本文件。仅在用户明确要求文件、HTML、CSV、JSON、"
+                "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string"},
+                    "content": {"type": "string"},
+                    "description": {"type": "string"},
+                    "content_type": {"type": "string"},
+                },
+                "required": ["filename", "content"],
+                "additionalProperties": False,
+            },
+            effect_level=ToolEffectLevel.WRITE,
+        )
+
+    def _execute_claude_file_create(
+        self,
+        arguments: dict[str, Any],
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        user_message_id: str,
+    ) -> dict[str, Any]:
+        try:
+            artifact = publish_text_artifact(
+                tenant_id=request.tenant_id,
+                session_id=chat_session.id,
+                task_frame_id=user_message_id,
+                filename=str(arguments.get("filename") or ""),
+                content=str(arguments.get("content") or ""),
+                description=str(arguments.get("description") or ""),
+                content_type=str(arguments.get("content_type") or "").strip() or None,
+            )
+        except (WorkspaceArtifactError, OSError) as exc:
+            return {
+                "tool_name": "staffdeck.create_file",
+                "success": False,
+                "error": {"code": "ARTIFACT_REJECTED", "message": str(exc)},
+            }
+        pending = self._pending_assistant_artifacts.setdefault(chat_session.id, [])
+        identity = (artifact["task_frame_id"], artifact["path"])
+        pending[:] = [
+            item
+            for item in pending
+            if (item.get("task_frame_id"), item.get("path")) != identity
+        ]
+        pending.append(artifact)
+        self.events.record(
+            request.tenant_id,
+            chat_session.id,
+            "harness_artifact_published",
+            self._turn_payload({"artifact": artifact}, user_message_id),
+        )
+        self.db.commit()
+        return {
+            "tool_name": "staffdeck.create_file",
+            "success": True,
+            "data": {
+                "artifact": artifact,
+                "instruction": "文件已登记；在 reply 中简短说明即可。",
+            },
+        }
 
     def _claude_general_skill_loader_tool(
         self, general_skills: list[GeneralSkill]
@@ -4371,6 +4477,64 @@ class AgentLoop:
             {"url": url},
         )
         return f"{reply.rstrip()}\n\nHTML 报告公网链接：[打开 HTML 报告]({url})"
+
+    def _prepare_claude_artifact_delivery(
+        self,
+        message: str,
+        chat_session: ChatSession,
+        user_message_id: str,
+        reply: str,
+    ) -> str:
+        delivery_message, request_message_id = self._html_delivery_request_context(
+            message, chat_session
+        )
+        if delivery_message:
+            pending = self._pending_assistant_artifacts.setdefault(chat_session.id, [])
+            already_has_html = any(
+                str(item.get("path") or "").lower().endswith((".html", ".htm"))
+                and str(item.get("task_frame_id") or "") == user_message_id
+                for item in pending
+            )
+            if not already_has_html:
+                try:
+                    title = str(chat_session.title or "Agent Team 报告").strip()
+                    tool_results = self._html_artifact_tool_results(
+                        chat_session, request_message_id=request_message_id
+                    )
+                    document = render_html_report(
+                        title,
+                        reply,
+                        delivery_message,
+                        tool_results=tool_results,
+                    )
+                    artifact = publish_text_artifact(
+                        tenant_id=chat_session.tenant_id,
+                        session_id=chat_session.id,
+                        task_frame_id=user_message_id,
+                        filename="agent-report.html",
+                        content=document,
+                        description="HTML 报告",
+                        content_type="text/html; charset=utf-8",
+                    )
+                    pending.append(artifact)
+                    self.events.record(
+                        chat_session.tenant_id,
+                        chat_session.id,
+                        "harness_artifact_published",
+                        self._turn_payload({"artifact": artifact}, user_message_id),
+                    )
+                    self.db.commit()
+                except (WorkspaceArtifactError, OSError) as exc:
+                    self.events.record(
+                        chat_session.tenant_id,
+                        chat_session.id,
+                        "harness_artifact_publish_failed",
+                        self._turn_payload(
+                            {"error_type": type(exc).__name__}, user_message_id
+                        ),
+                    )
+                    self.db.commit()
+        return self._with_html_artifact(message, chat_session, reply)
 
     def _html_delivery_request_context(
         self, message: str, chat_session: ChatSession
@@ -7928,8 +8092,14 @@ class AgentLoop:
         citations = self._dedupe_knowledge_citations(
             knowledge_citations_from_results(knowledge_results)
         )
+        metadata: dict[str, Any] = {}
+        pending_artifacts = getattr(self, "_pending_assistant_artifacts", {}).pop(
+            chat_session.id, []
+        )
+        if pending_artifacts:
+            metadata["harness_artifacts"] = pending_artifacts
         if not citations:
-            return {}
+            return metadata
         first_query = next(
             (
                 item.get("query")
@@ -7938,10 +8108,13 @@ class AgentLoop:
             ),
             None,
         )
-        return {
-            "knowledge_citations": citations,
-            "knowledge_query": first_query or {},
-        }
+        metadata.update(
+            {
+                "knowledge_citations": citations,
+                "knowledge_query": first_query or {},
+            }
+        )
+        return metadata
 
     def _dedupe_knowledge_citations(self, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set[str] = set()
@@ -8354,6 +8527,8 @@ class AgentLoop:
             event_payload["turn_id"] = user_message_id
         if assistant_metadata.get("knowledge_citations"):
             event_payload["knowledge_citations"] = assistant_metadata["knowledge_citations"]
+        if assistant_metadata.get("harness_artifacts"):
+            event_payload["harness_artifacts"] = assistant_metadata["harness_artifacts"]
         self.events.record(
             tenant_id,
             chat_session.id,

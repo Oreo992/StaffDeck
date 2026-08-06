@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatSession,
   ChatSessionEventRead,
+  HarnessWorkspaceArtifact,
   KnowledgeCitation,
   ScheduledTaskDraftRead,
   ScheduledTaskRead,
@@ -1758,6 +1759,50 @@ export function messageAttachments(messageItem: ChatMessage): ChatAttachmentRead
   const attachments = messageItem.metadata?.attachments;
   if (!Array.isArray(attachments)) return [];
   return attachments.filter(isChatAttachment);
+}
+
+export function harnessWorkspaceArtifacts(
+  messageItem: ChatMessage,
+): HarnessWorkspaceArtifact[] {
+  const artifacts = messageItem.metadata?.harness_artifacts;
+  if (!Array.isArray(artifacts)) return [];
+  const seen = new Set<string>();
+  const result: HarnessWorkspaceArtifact[] = [];
+  artifacts.forEach((value) => {
+    if (!value || typeof value !== 'object') return;
+    const artifact = value as Partial<HarnessWorkspaceArtifact>;
+    if (
+      artifact.type !== 'workspace_file'
+      || typeof artifact.task_frame_id !== 'string'
+      || !artifact.task_frame_id.trim()
+      || typeof artifact.path !== 'string'
+      || !artifact.path.trim()
+    ) return;
+    const identity = `${artifact.task_frame_id}\u001f${artifact.path}`;
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    result.push({
+      type: 'workspace_file',
+      task_frame_id: artifact.task_frame_id,
+      path: artifact.path,
+      ...(typeof artifact.sha256 === 'string' ? { sha256: artifact.sha256 } : {}),
+      ...(typeof artifact.size === 'number' && Number.isFinite(artifact.size)
+        ? { size: artifact.size }
+        : {}),
+      ...(typeof artifact.display_name === 'string'
+        ? { display_name: artifact.display_name }
+        : {}),
+      ...(typeof artifact.description === 'string'
+        ? { description: artifact.description }
+        : {}),
+      ...(typeof artifact.content_type === 'string'
+        ? { content_type: artifact.content_type }
+        : {}),
+      ...(typeof artifact.operation === 'string' ? { operation: artifact.operation } : {}),
+      ...(typeof artifact.source === 'string' ? { source: artifact.source } : {}),
+    });
+  });
+  return result;
 }
 
 function isChatAttachment(value: unknown): value is ChatAttachmentRead {

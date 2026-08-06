@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.api.chat import message_read, session_read
@@ -10,6 +16,11 @@ from app.security.auth import get_current_user
 from app.security.tenant import ensure_tenant
 
 router = APIRouter(prefix="/api/enterprise/sessions", tags=["enterprise:sessions"])
+SESSION_LOG_EXPORT_SCHEMA = "staffdeck.conversation-log.v1"
+
+
+class SessionLogExportRequest(BaseModel):
+    session_ids: list[str] = Field(min_length=1, max_length=500)
 
 
 @router.get("")
@@ -30,6 +41,50 @@ def list_sessions(
     return [session_read(row).model_dump() for row in rows]
 
 
+@router.post("/export")
+def export_session_logs(
+    request: SessionLogExportRequest,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Response:
+    _ensure_request_tenant(tenant_id, current_user)
+    session_ids = list(dict.fromkeys(request.session_ids))
+    rows = [
+        _get_chat_session(db, tenant_id, current_user.id, session_id)
+        for session_id in session_ids
+    ]
+    exported_at = datetime.now(UTC)
+    return _json_download_response(
+        {
+            "schema_version": SESSION_LOG_EXPORT_SCHEMA,
+            "exported_at": exported_at,
+            "count": len(rows),
+            "items": [_session_detail_payload(db, tenant_id, row) for row in rows],
+        },
+        f"staffdeck-conversation-logs-{exported_at.strftime('%Y%m%d-%H%M%S')}.json",
+    )
+
+
+@router.get("/{session_id}/export")
+def export_session_log(
+    session_id: str,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Response:
+    _ensure_request_tenant(tenant_id, current_user)
+    row = _get_chat_session(db, tenant_id, current_user.id, session_id)
+    return _json_download_response(
+        {
+            "schema_version": SESSION_LOG_EXPORT_SCHEMA,
+            "exported_at": datetime.now(UTC),
+            "item": _session_detail_payload(db, tenant_id, row),
+        },
+        f"staffdeck-conversation-log-{_safe_filename_part(session_id)}.json",
+    )
+
+
 @router.get("/{session_id}")
 def get_session_detail(
     session_id: str,
@@ -39,14 +94,18 @@ def get_session_detail(
 ) -> dict:
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_chat_session(db, tenant_id, current_user.id, session_id)
+    return _session_detail_payload(db, tenant_id, row)
+
+
+def _session_detail_payload(db: Session, tenant_id: str, row: ChatSession) -> dict:
     messages = db.exec(
         select(Message)
-        .where(Message.tenant_id == tenant_id, Message.session_id == session_id)
+        .where(Message.tenant_id == tenant_id, Message.session_id == row.id)
         .order_by(Message.created_at)
     ).all()
     events = db.exec(
         select(AgentEvent)
-        .where(AgentEvent.tenant_id == tenant_id, AgentEvent.session_id == session_id)
+        .where(AgentEvent.tenant_id == tenant_id, AgentEvent.session_id == row.id)
         .order_by(AgentEvent.created_at)
     ).all()
     return {
@@ -62,6 +121,26 @@ def get_session_detail(
             for event in events
         ],
     }
+
+
+def _json_download_response(payload: object, filename: str) -> Response:
+    content = json.dumps(
+        jsonable_encoder(payload),
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _safe_filename_part(value: str) -> str:
+    safe = "".join(
+        character if character.isalnum() or character in "-_" else "-" for character in value
+    )
+    return safe.strip("-") or "session"
 
 
 @router.post("/{session_id}/reset")

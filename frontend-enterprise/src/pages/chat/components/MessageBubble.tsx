@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import type {
   ChatAttachmentRead,
   ChatMessage,
+  HarnessWorkspaceArtifact,
   KnowledgeCitation,
   ScheduledTaskDraftRead,
   ScheduledTaskRead,
@@ -46,6 +47,7 @@ import {
 import type { TraceLine } from '../chatTypes';
 import type { UseChatSession } from '../useChatSession';
 import ExecutionRecord from './ExecutionRecord';
+import HarnessArtifactDownloads from './HarnessArtifactDownloads';
 import ScheduledDraftCard from './ScheduledDraftCard';
 
 export type MessageRender = {
@@ -60,6 +62,7 @@ export type MessageRender = {
   createdTask?: ScheduledTaskRead;
   scheduledTaskPrompt: boolean;
   attachments: ChatAttachmentRead[];
+  harnessArtifacts: HarnessWorkspaceArtifact[];
   statusOnly: boolean;
 };
 
@@ -83,6 +86,7 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
     createdTask,
     scheduledTaskPrompt,
     attachments,
+    harnessArtifacts,
     statusOnly,
   } = render;
   const queuedMessage = item.role === 'user' && item.metadata?.queued === true;
@@ -144,6 +148,14 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
                 </div>
               ))}
             </div>
+          )}
+
+          {!statusOnly && item.role === 'assistant' && (
+            <HarnessArtifactDownloads
+              artifacts={harnessArtifacts}
+              tenantId={chat.tenantId}
+              sessionId={chat.activeConversationId || ''}
+            />
           )}
 
           {item.role === 'assistant' && citations.length > 0 && (

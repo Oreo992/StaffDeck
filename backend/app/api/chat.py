@@ -10,12 +10,17 @@ from collections.abc import Callable, Iterator
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.agents.branching import model_for_agent
+from app.artifacts.workspace_delivery import (
+    WorkspaceArtifactError,
+    normalize_artifact_path,
+    read_published_artifact,
+)
 from app.core import AgentLoop
 from app.core.cancellation import cancel_chat_turn
 from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
@@ -1852,6 +1857,49 @@ def list_chat_messages(
     return [message_read(row, feedback_by_message.get(row.id), turn_ids_by_message.get(row.id), db) for row in rows]
 
 
+@router.get("/sessions/{session_id}/artifacts/{task_frame_id}")
+def download_workspace_artifact(
+    session_id: str,
+    task_frame_id: str,
+    tenant_id: str = Query(...),
+    path: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Download a file explicitly published in an assistant message."""
+    _ensure_request_tenant(tenant_id, current_user)
+    _get_readable_chat_session(db, tenant_id, current_user, session_id)
+    artifact = _published_workspace_artifact(
+        db,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        requested_path=path,
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    try:
+        data, filename, media_type = read_published_artifact(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            task_frame_id=task_frame_id,
+            artifact=artifact,
+        )
+    except WorkspaceArtifactError:
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")[:120]
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'attachment; filename="{fallback or "artifact"}"',
+            "X-Content-Type-Options": "nosniff",
+            "ETag": f'"sha256:{artifact.get("sha256") or ""}"',
+        },
+    )
+
+
 @router.get("/sessions/{session_id}/events")
 def list_chat_session_events(
     session_id: str,
@@ -2127,6 +2175,43 @@ def _get_readable_chat_session(db: Session, tenant_id: str, current_user: User, 
     if _user_can_read_handoff_session(db, tenant_id, current_user, session_id):
         return row
     raise HTTPException(status_code=404, detail="Session not found")
+
+
+def _published_workspace_artifact(
+    db: Session,
+    *,
+    tenant_id: str,
+    session_id: str,
+    task_frame_id: str,
+    requested_path: str,
+) -> dict[str, object] | None:
+    try:
+        normalized_requested_path = normalize_artifact_path(requested_path)
+    except WorkspaceArtifactError:
+        return None
+    rows = db.exec(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.session_id == session_id,
+            Message.role == "assistant",
+        )
+    ).all()
+    for row in rows:
+        artifacts = (row.metadata_json or {}).get("harness_artifacts")
+        if not isinstance(artifacts, list):
+            continue
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or artifact.get("type") != "workspace_file":
+                continue
+            if str(artifact.get("task_frame_id") or "") != task_frame_id:
+                continue
+            try:
+                stored_path = normalize_artifact_path(str(artifact.get("path") or ""))
+            except WorkspaceArtifactError:
+                continue
+            if stored_path == normalized_requested_path:
+                return dict(artifact)
+    return None
 
 
 def _user_can_read_handoff_session(db: Session, tenant_id: str, current_user: User, session_id: str) -> bool:

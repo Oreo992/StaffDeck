@@ -24,6 +24,8 @@ export const DISTILL_CARD_HEADER_CLASS =
 export const CARD_OUTLINE_BUTTON_CLASS = RETURN_BUTTON_CLASS;
 
 export const CHAT_CARD_CLASS = DISTILL_CARD_CLASS;
+export const CHAT_CARD_FULLSCREEN_CLASS =
+  'fixed! right-0! top-0! bottom-0! z-[130]! h-dvh! w-[min(440px,42vw)]! rounded-none! border-l! border-[#e3e7f1]! shadow-[-18px_0_42px_rgba(21,26,38,0.12)]! max-[900px]:w-full!';
 export const CHAT_CARD_BODY_CLASS = DISTILL_CARD_BODY_CLASS;
 export const CHAT_CARD_DRAGGING_CLASS = 'ring-1 ring-[#18181a]/15';
 export const SOURCE_CARD_CLASS = DISTILL_CARD_CLASS;
@@ -288,6 +290,12 @@ export const FLOW_ZOOM_VALUE_CLASS =
   'inline-flex h-7 min-w-[42px] items-center justify-center rounded-[9px] bg-[#fafafa] px-2 text-center font-mono text-[12px] leading-none text-[#18181a]';
 export const FLOW_CLASS =
   'block min-h-0 flex-1 overflow-auto px-[clamp(18px,3vw,40px)] py-[clamp(18px,2.8vw,34px)] pb-16';
+export const FLOW_VIEWER_FULLSCREEN_CLASS =
+  'fixed inset-0 z-[110] flex min-h-0 flex-col bg-white p-[14px]';
+export const FLOW_FULLSCREEN_CANVAS_CLASS =
+  'cursor-grab select-none rounded-[14px] border border-[#eceef1] active:cursor-grabbing';
+export const FLOW_FULLSCREEN_EDITOR_CLASS =
+  'absolute right-0 top-[58px] bottom-0 z-[120] w-[min(480px,44vw)] overflow-auto border-l border-[#e3e7f1] bg-white p-[16px] shadow-[-18px_0_42px_rgba(21,26,38,0.1)] max-[900px]:w-full';
 export const FLOW_ZOOM_SHELL_CLASS = 'relative mx-0 min-w-full';
 export const FLOW_GRAPH_CANVAS_CLASS =
   'absolute top-0 left-0 origin-top-left rounded-[18px] bg-[radial-gradient(circle_at_40px_40px,rgba(18,128,115,0.05),transparent_240px),linear-gradient(90deg,rgba(218,211,199,0.38)_1px,transparent_1px),linear-gradient(rgba(218,211,199,0.26)_1px,transparent_1px)] [background-size:auto,72px_72px,72px_72px] box-border';

@@ -32,10 +32,12 @@ import {
   type HTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
   type RefObject,
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Maximize2, MessageSquareText, Minimize2, PanelRight } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -80,6 +82,7 @@ import {
   CHAT_ATTACHMENTS_USER_CLASS,
   CHAT_CARD_CLASS,
   CHAT_CARD_DRAGGING_CLASS,
+  CHAT_CARD_FULLSCREEN_CLASS,
   CHAT_ACTIONS_CLASS,
   CHAT_COMPOSER_SHELL_CLASS,
   CHAT_CONFIRM_CLASS,
@@ -120,6 +123,8 @@ import {
   FLOW_CHIP_LIST_CLASS,
   FLOW_CHIP_MUTED_CLASS,
   FLOW_CLASS,
+  FLOW_FULLSCREEN_CANVAS_CLASS,
+  FLOW_FULLSCREEN_EDITOR_CLASS,
   FLOW_COMPACT_META_CLASS,
   FLOW_COMPACT_ROW_CLASS,
   FLOW_EDGES_CLASS,
@@ -154,6 +159,7 @@ import {
   FLOW_ZOOM_STEP_BUTTON_CLASS,
   FLOW_ZOOM_TOOLBAR_CLASS,
   FLOW_ZOOM_VALUE_CLASS,
+  FLOW_VIEWER_FULLSCREEN_CLASS,
   flowZoomPresetButtonClass,
   INLINE_ADD_CLASS,
   INLINE_ADD_SETTLED_CLASS,
@@ -518,6 +524,8 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     outgoingText: string;
   } | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('source');
+  const [flowFullscreen, setFlowFullscreen] = useState(false);
+  const [flowSidePanel, setFlowSidePanel] = useState<'edit' | 'ai' | null>('edit');
   const [loading, setLoading] = useState(false);
   const [attachments, setAttachments] = useState<UploadAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
@@ -539,6 +547,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   const dragDepthRef = useRef(0);
   const animationTimersRef = useRef<number[]>([]);
   const sourceScrollRef = useRef<HTMLDivElement | null>(null);
+  const flowEditorScrollRef = useRef<HTMLDivElement | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const [cacheReady, setCacheReady] = useState(false);
   const [hydratedCacheKey, setHydratedCacheKey] = useState('');
@@ -2019,9 +2028,14 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
       </div>
       <div className={WORKBENCH_CLASS}>
         <DistillSectionCard
-          className={cn(CHAT_CARD_CLASS, 'h-full min-h-0', dragActive && CHAT_CARD_DRAGGING_CLASS)}
+          className={cn(
+            CHAT_CARD_CLASS,
+            'h-full min-h-0',
+            dragActive && CHAT_CARD_DRAGGING_CLASS,
+            flowFullscreen && flowSidePanel === 'ai' && CHAT_CARD_FULLSCREEN_CLASS,
+          )}
           bodyClassName={CHAT_CARD_BODY_CLASS}
-          title="对话蒸馏"
+          title={flowFullscreen && flowSidePanel === 'ai' ? 'AI 修改' : '对话蒸馏'}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -2404,6 +2418,29 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
                 toolStatuses={toolStatuses}
                 containerRef={sourceScrollRef}
                 onToggle={toggleTarget}
+                isFullscreen={flowFullscreen}
+                sidePanel={flowSidePanel}
+                onFullscreenChange={(open) => {
+                  setFlowFullscreen(open);
+                  if (open && !flowSidePanel) setFlowSidePanel('edit');
+                }}
+                onSidePanelChange={setFlowSidePanel}
+                editorPanel={(
+                  <SkillSource
+                    skill={draft}
+                    selectedPaths={selectedPaths}
+                    highlightedPaths={highlightedPaths}
+                    updatingPaths={updatingPaths}
+                    dirtyPaths={dirtyPaths}
+                    textDiffs={textDiffs}
+                    toolDescriptions={toolDescriptions}
+                    toolStatuses={toolStatuses}
+                    containerRef={flowEditorScrollRef}
+                    lockSkillId={Boolean(lockedSkillId)}
+                    onToggle={toggleTarget}
+                    onEdit={handleSourceEdit}
+                  />
+                )}
               />
             </div>
           )}
@@ -3334,6 +3371,11 @@ function SkillFlow({
   toolStatuses,
   containerRef,
   onToggle,
+  isFullscreen,
+  sidePanel,
+  onFullscreenChange,
+  onSidePanelChange,
+  editorPanel,
 }: {
   skill: SkillCard;
   selectedPaths: string[];
@@ -3345,8 +3387,14 @@ function SkillFlow({
   toolStatuses: ToolStatusMap;
   containerRef: RefObject<HTMLDivElement>;
   onToggle: (target: TargetSelection) => void;
+  isFullscreen: boolean;
+  sidePanel: 'edit' | 'ai' | null;
+  onFullscreenChange: (open: boolean) => void;
+  onSidePanelChange: (panel: 'edit' | 'ai' | null) => void;
+  editorPanel: ReactNode;
 }) {
   const [flowZoom, setFlowZoom] = useState(0.64);
+  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const nodes = skillGraphSteps(skill);
   const edgeMap = skillGraphEdgeMap(skill);
   const terminalSet = new Set(asStringList(skill.terminal_node_ids));
@@ -3362,7 +3410,7 @@ function SkillFlow({
   const zoomedWidth = graphLayout.width * flowZoom;
   const zoomedHeight = graphLayout.height * flowZoom;
   const updateZoom = (nextZoom: number) => {
-    const next = Math.min(1.18, Math.max(0.54, Math.round(nextZoom * 100) / 100));
+    const next = Math.min(1.18, Math.max(isFullscreen ? 0.2 : 0.54, Math.round(nextZoom * 100) / 100));
     const container = containerRef.current;
     if (!container) {
       setFlowZoom(next);
@@ -3390,8 +3438,55 @@ function SkillFlow({
   }, [containerRef, flowZoom, graphKey, graphLayout.root.x, graphLayout.root.width]);
   const isFitZoom = Math.abs(flowZoom - 0.64) < 0.001;
   const isFullZoom = Math.abs(flowZoom - 1) < 0.001;
+
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onFullscreenChange(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isFullscreen, onFullscreenChange]);
+
+  const startPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!isFullscreen || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button, a, input, textarea, select, [role="button"]')) return;
+    panStart.current = {
+      x: event.clientX,
+      y: event.clientY,
+      left: event.currentTarget.scrollLeft,
+      top: event.currentTarget.scrollTop,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePan = (event: PointerEvent<HTMLDivElement>) => {
+    const start = panStart.current;
+    if (!start) return;
+    event.currentTarget.scrollLeft = start.left - (event.clientX - start.x);
+    event.currentTarget.scrollTop = start.top - (event.clientY - start.y);
+  };
+
+  const stopPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!panStart.current) return;
+    panStart.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
   return (
-    <>
+    <div
+      className={cn('flex min-h-0 flex-1 flex-col', isFullscreen && FLOW_VIEWER_FULLSCREEN_CLASS)}
+      role={isFullscreen ? 'dialog' : undefined}
+      aria-modal={isFullscreen || undefined}
+      aria-label={isFullscreen ? 'SOP 流程图全屏编辑' : undefined}
+    >
       <div className={FLOW_ZOOM_TOOLBAR_CLASS} aria-label="流程图缩放">
         <span className="shrink-0">缩放</span>
         <UIButton variant="outline" size="sm" className={FLOW_ZOOM_STEP_BUTTON_CLASS} onClick={() => updateZoom(flowZoom - 0.08)} aria-label="缩小">
@@ -3419,8 +3514,50 @@ function SkillFlow({
         >
           100%
         </UIButton>
+        <span className="flex-1" />
+        {isFullscreen && (
+          <>
+            <UIButton
+              variant="outline"
+              size="sm"
+              className={flowZoomPresetButtonClass(sidePanel === 'edit')}
+              aria-pressed={sidePanel === 'edit'}
+              onClick={() => onSidePanelChange(sidePanel === 'edit' ? null : 'edit')}
+            >
+              <PanelRight className="size-[14px]" />
+              编辑
+            </UIButton>
+            <UIButton
+              variant="outline"
+              size="sm"
+              className={flowZoomPresetButtonClass(sidePanel === 'ai')}
+              aria-pressed={sidePanel === 'ai'}
+              onClick={() => onSidePanelChange(sidePanel === 'ai' ? null : 'ai')}
+            >
+              <MessageSquareText className="size-[14px]" />
+              AI 修改
+            </UIButton>
+          </>
+        )}
+        <UIButton
+          variant="outline"
+          size="sm"
+          className={flowZoomPresetButtonClass(isFullscreen)}
+          aria-label={isFullscreen ? '退出全屏' : '全屏查看流程图'}
+          onClick={() => onFullscreenChange(!isFullscreen)}
+        >
+          {isFullscreen ? <Minimize2 className="size-[14px]" /> : <Maximize2 className="size-[14px]" />}
+          {isFullscreen ? '退出全屏' : '全屏查看'}
+        </UIButton>
       </div>
-      <div className={FLOW_CLASS} ref={containerRef}>
+      <div
+        className={cn(FLOW_CLASS, isFullscreen && FLOW_FULLSCREEN_CANVAS_CLASS)}
+        ref={containerRef}
+        onPointerDown={startPan}
+        onPointerMove={movePan}
+        onPointerUp={stopPan}
+        onPointerCancel={stopPan}
+      >
         <div
           className={FLOW_ZOOM_SHELL_CLASS}
           style={{ width: zoomedWidth, height: zoomedHeight }}
@@ -3519,7 +3656,12 @@ function SkillFlow({
           </div>
         </div>
       </div>
-    </>
+      {isFullscreen && sidePanel === 'edit' && (
+        <aside className={FLOW_FULLSCREEN_EDITOR_CLASS} aria-label="SOP 节点编辑器">
+          {editorPanel}
+        </aside>
+      )}
+    </div>
   );
 }
 
