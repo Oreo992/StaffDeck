@@ -68,7 +68,7 @@ async def test_adapter_disables_builtin_tools_and_resumes_sdk_session() -> None:
             model="claude-test",
             api_key="secret",
             prompt="执行 SOP",
-            system_prompt="严格遵守 StaffDeck",
+            system_prompt="遵守运行时约束",
             resume_session_id="sdk-session-old",
             tools=[
                 HarnessTool(
@@ -88,8 +88,9 @@ async def test_adapter_disables_builtin_tools_and_resumes_sdk_session() -> None:
     options = created[0].options
     assert options.tools == []
     assert options.strict_mcp_config is True
-    assert set(options.mcp_servers) == {"staffdeck"}
-    assert options.allowed_tools == ["mcp__staffdeck__product_price_query"]
+    assert set(options.mcp_servers) == {"runtime"}
+    assert options.allowed_tools == ["mcp__runtime__product_price_query"]
+    assert "staffdeck" not in " ".join(options.allowed_tools).lower()
     assert options.resume == "sdk-session-old"
     assert options.env["ANTHROPIC_API_KEY"] == "secret"
     assert result.session_id == "sdk-session-1"

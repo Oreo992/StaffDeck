@@ -109,7 +109,7 @@ class _FilePublishingHarness:
         self.requests.append(request)
         assert request.execute_tool is not None
         created = request.execute_tool(
-            "staffdeck.create_file",
+            "send_file",
             {
                 "filename": "report.html",
                 "content": "<!doctype html><html><body>verified</body></html>",
@@ -118,8 +118,8 @@ class _FilePublishingHarness:
         )
         assert isinstance(created, dict) and created["success"] is True
         published = request.execute_tool(
-            "staffdeck.publish_html",
-            {"path": created["data"]["artifact"]["path"]},
+            "publish_file",
+            {"artifact_id": created["data"]["artifact"]["artifact_id"]},
         )
         assert isinstance(published, dict) and published["success"] is True
         url = published["data"]["url"]
@@ -148,8 +148,8 @@ class _SkillLoadingHarness:
     async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
         self.requests.append(request)
         assert request.execute_tool is not None
-        self.loaded = request.execute_tool("staffdeck.load_skill", {"slug": "sellersprite"})
-        self.denied = request.execute_tool("staffdeck.load_skill", {"slug": "unbound"})
+        self.loaded = request.execute_tool("load_skill", {"slug": "sellersprite"})
+        self.denied = request.execute_tool("load_skill", {"slug": "unbound"})
         return HarnessRunResult(
             session_id="skill-session-1",
             output=HarnessStructuredOutput(reply="已按 SellerSprite 方法完成判断。"),
@@ -173,7 +173,7 @@ class _SkillOnlyHarness:
     async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
         self.requests.append(request)
         assert request.execute_tool is not None
-        loaded = request.execute_tool("staffdeck.load_skill", {"slug": "sellersprite"})
+        loaded = request.execute_tool("load_skill", {"slug": "sellersprite"})
         assert isinstance(loaded, dict) and loaded["success"] is True
         return HarnessRunResult(
             session_id="skill-only-session",
@@ -202,12 +202,12 @@ class _SopActivatingHarness:
     async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
         self.requests.append(request)
         tool_names = {tool.name for tool in request.tools}
-        if "staffdeck.activate_sop" in tool_names:
+        if "activate_sop" in tool_names:
             assert request.execute_tool is not None
-            activation_tool = next(tool for tool in request.tools if tool.name == "staffdeck.activate_sop")
+            activation_tool = next(tool for tool in request.tools if tool.name == "activate_sop")
             assert "slots" in activation_tool.input_schema["properties"]
             result = request.execute_tool(
-                "staffdeck.activate_sop",
+                "activate_sop",
                 {
                     "skill_id": "graph_demo",
                     "slots": {"request_type": "price", "product_name": "A1"},
@@ -482,7 +482,7 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
         assert chat_session.slots_json == {"preserved": "value"}
 
 
-def test_claude_must_call_publish_html_and_return_the_tool_url(monkeypatch, tmp_path) -> None:
+def test_claude_must_call_publish_file_and_return_the_tool_url(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
 
     class FakePublisher:
@@ -526,9 +526,10 @@ def test_claude_must_call_publish_html_and_return_the_tool_url(monkeypatch, tmp_
         )
 
         assert {tool.name for tool in harness.requests[0].tools} == {
-            "staffdeck.create_file",
-            "staffdeck.publish_html",
+            "send_file",
+            "publish_file",
         }
+        assert all("staffdeck" not in tool.name.lower() for tool in harness.requests[0].tools)
         assert outcome.reply == (
             "文件已生成：[打开报告](https://agent.neospark.cn/files/verified.html)"
         )
@@ -579,8 +580,8 @@ def test_claude_loads_only_bound_general_skill_on_demand_and_records_event() -> 
         assert outcome.reply == "已按 SellerSprite 方法完成判断。"
         assert {item.name for item in harness.requests[0].tools} == {
             "product.price_query",
-            "staffdeck.activate_sop",
-            "staffdeck.load_skill",
+            "activate_sop",
+            "load_skill",
         }
         assert harness.loaded is not None
         assert harness.loaded["success"] is True
@@ -643,7 +644,7 @@ def test_loading_general_skill_does_not_count_as_sop_business_evidence() -> None
 
         assert {item.name for item in harness.requests[0].tools} == {
             "product.price_query",
-            "staffdeck.load_skill",
+            "load_skill",
         }
         assert chat_session.active_skill_id == "graph_demo"
         assert chat_session.active_step_id == "collect"
@@ -803,7 +804,7 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         assert '"router_suggestion": "graph_demo"' in harness.requests[0].prompt
         assert harness.requests[0].max_turns == 3
         assert [tool.name for tool in harness.requests[0].tools] == [
-            "staffdeck.activate_sop",
+            "activate_sop",
         ]
         activation_tool = harness.requests[0].tools[0]
         assert "L1/L2/L3" not in activation_tool.description

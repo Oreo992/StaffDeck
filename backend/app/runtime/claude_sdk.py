@@ -82,11 +82,11 @@ class ClaudeAgentSdkAdapter:
         mcp_servers: dict[str, Any] = {}
         allowed_tools: list[str] = []
         if tool_functions:
-            mcp_servers["staffdeck"] = sdk.create_sdk_mcp_server(
-                name="staffdeck", version="1.0.0", tools=tool_functions
+            mcp_servers["runtime"] = sdk.create_sdk_mcp_server(
+                name="runtime", version="1.0.0", tools=tool_functions
             )
             allowed_tools = [
-                f"mcp__staffdeck__{self._sdk_tool_name(tool.name)}" for tool in request.tools
+                f"mcp__runtime__{self._sdk_tool_name(tool.name)}" for tool in request.tools
             ]
         options = sdk.ClaudeAgentOptions(
             tools=[],
@@ -232,7 +232,7 @@ class ClaudeAgentSdkAdapter:
 
     def _sdk_tool_name(self, name: str) -> str:
         normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_")
-        return normalized or "staffdeck_tool"
+        return normalized or "runtime_tool"
 
     def _emit(self, request: HarnessRunRequest, event_type: str, payload: dict[str, Any]) -> None:
         if request.event_sink:

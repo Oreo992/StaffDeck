@@ -30,7 +30,6 @@ from app.artifacts.html_delivery import (
 )
 from app.artifacts.workspace_delivery import (
     WorkspaceArtifactError,
-    normalize_artifact_path,
     publish_text_artifact,
     read_published_artifact,
 )
@@ -2638,12 +2637,12 @@ class AgentLoop:
                 harness_tools.append(general_skill_tool)
             if _requests_file_delivery(request.message):
                 harness_tools.extend(
-                    [self._claude_create_file_tool(), self._claude_publish_html_tool()]
+                    [self._claude_send_file_tool(), self._claude_publish_file_tool()]
                 )
             if visible_kb_ids:
                 harness_tools.append(
                     HarnessTool(
-                        name="staffdeck.knowledge_search",
+                        name="knowledge_search",
                         description="检索当前数字员工可见的知识库。",
                         input_schema={
                             "type": "object",
@@ -2659,15 +2658,15 @@ class AgentLoop:
 
             def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 nonlocal last_tool_result
-                if tool_name == "staffdeck.create_file":
-                    return self._execute_claude_file_create(
+                if tool_name == "send_file":
+                    return self._execute_claude_file_send(
                         arguments, request, chat_session, user_message_id
                     )
-                if tool_name == "staffdeck.publish_html":
-                    return self._execute_claude_html_publish(
+                if tool_name == "publish_file":
+                    return self._execute_claude_file_publish(
                         arguments, request, chat_session, user_message_id
                     )
-                if tool_name == "staffdeck.load_skill":
+                if tool_name == "load_skill":
                     return self._execute_claude_general_skill_load(
                         general_skill_by_slug,
                         arguments,
@@ -2676,7 +2675,7 @@ class AgentLoop:
                         user_message_id,
                         loaded_general_skill_slugs,
                     )
-                if tool_name == "staffdeck.knowledge_search":
+                if tool_name == "knowledge_search":
                     if not visible_kb_ids:
                         return {
                             "tool_name": tool_name,
@@ -3079,12 +3078,12 @@ class AgentLoop:
             harness_tools.append(general_skill_tool)
         if _requests_file_delivery(request.message):
             harness_tools.extend(
-                [self._claude_create_file_tool(), self._claude_publish_html_tool()]
+                [self._claude_send_file_tool(), self._claude_publish_file_tool()]
             )
         if visible_kb_ids:
             harness_tools.append(
                 HarnessTool(
-                    name="staffdeck.knowledge_search",
+                    name="knowledge_search",
                     description="检索当前数字员工可见的知识库。",
                     input_schema={
                         "type": "object",
@@ -3112,7 +3111,7 @@ class AgentLoop:
                 )
             harness_tools.append(
                 HarnessTool(
-                    name="staffdeck.activate_sop",
+                    name="activate_sop",
                     description=(
                         "当任务确实需要固定流程时申请进入 SOP；把当前消息中已经明确的信息"
                         "一并写入 slots，不要为了补齐可选字段追问用户。"
@@ -3141,11 +3140,11 @@ class AgentLoop:
                 for tool in harness_tools
                 if tool.name
                 in {
-                    "staffdeck.activate_sop",
-                    "staffdeck.create_file",
-                    "staffdeck.publish_html",
-                    "staffdeck.knowledge_search",
-                    "staffdeck.load_skill",
+                    "activate_sop",
+                    "send_file",
+                    "publish_file",
+                    "knowledge_search",
+                    "load_skill",
                 }
             ]
         tool_by_name = {tool.name: tool for tool in read_tools}
@@ -3191,15 +3190,15 @@ class AgentLoop:
 
         def execute_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             nonlocal requested_sop, requested_sop_slots
-            if tool_name == "staffdeck.create_file":
-                return self._execute_claude_file_create(
+            if tool_name == "send_file":
+                return self._execute_claude_file_send(
                     arguments, request, chat_session, user_message_id
                 )
-            if tool_name == "staffdeck.publish_html":
-                return self._execute_claude_html_publish(
+            if tool_name == "publish_file":
+                return self._execute_claude_file_publish(
                     arguments, request, chat_session, user_message_id
                 )
-            if tool_name == "staffdeck.load_skill":
+            if tool_name == "load_skill":
                 return self._execute_claude_general_skill_load(
                     general_skill_by_slug,
                     arguments,
@@ -3208,7 +3207,7 @@ class AgentLoop:
                     user_message_id,
                     loaded_general_skill_slugs,
                 )
-            if tool_name == "staffdeck.activate_sop":
+            if tool_name == "activate_sop":
                 requested_sop = sop_by_id.get(str(arguments.get("skill_id") or ""))
                 if not requested_sop:
                     return {
@@ -3237,7 +3236,7 @@ class AgentLoop:
                         "instruction": "停止当前动作并返回；下一执行段将激活 SOP。",
                     },
                 }
-            if tool_name == "staffdeck.knowledge_search":
+            if tool_name == "knowledge_search":
                 search_response = self.knowledge.search(
                     KnowledgeSearchRequest(
                         tenant_id=request.tenant_id,
@@ -3283,7 +3282,7 @@ class AgentLoop:
                     "success": False,
                     "error": {
                         "code": "SOP_ACTIVATION_REQUIRED",
-                        "message": "请先调用 staffdeck.activate_sop 进入建议的 SOP。",
+                        "message": "请先调用 activate_sop 进入建议的 SOP。",
                     },
                 }
             result = self._execute_tool_call(
@@ -3437,7 +3436,7 @@ class AgentLoop:
                     (
                         f"Claude 已进入 SOP：{requested_sop.name}"
                         if activation_source == "claude"
-                        else f"StaffDeck 已按 Router 判定进入 SOP：{requested_sop.name}"
+                        else f"运行时已按 Router 判定进入 SOP：{requested_sop.name}"
                     ),
                     {
                         "active_skill_id": requested_sop.skill_id,
@@ -3561,14 +3560,13 @@ class AgentLoop:
         return ledger
 
     @staticmethod
-    def _claude_create_file_tool() -> HarnessTool:
+    def _claude_send_file_tool() -> HarnessTool:
         return HarnessTool(
-            name="staffdeck.create_file",
+            name="send_file",
             description=(
-                "创建要交付给用户下载的文本文件。仅在用户明确要求文件、HTML、CSV、JSON、"
-                "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。调用成功后"
-                "StaffDeck 会提供下载入口。创建文件不会自动发布公网链接；用户要求 HTML 公网链接时，"
-                "还必须主动调用 staffdeck.publish_html。"
+                "把已生成的文本内容作为文件发送给用户下载。仅在用户明确要求文件、HTML、CSV、JSON、"
+                "Markdown 或可下载产物时调用；不要把文件源码再次完整粘贴到 reply。发送文件不会自动"
+                "产生公网链接；用户明确要求公网链接时，再把返回的 artifact_id 传给 publish_file。"
             ),
             input_schema={
                 "type": "object",
@@ -3584,7 +3582,7 @@ class AgentLoop:
             effect_level=ToolEffectLevel.WRITE,
         )
 
-    def _execute_claude_file_create(
+    def _execute_claude_file_send(
         self,
         arguments: dict[str, Any],
         request: ChatTurnRequest,
@@ -3603,10 +3601,11 @@ class AgentLoop:
             )
         except (WorkspaceArtifactError, OSError) as exc:
             return {
-                "tool_name": "staffdeck.create_file",
+                "tool_name": "send_file",
                 "success": False,
                 "error": {"code": "ARTIFACT_REJECTED", "message": str(exc)},
             }
+        artifact["artifact_id"] = new_id("artifact")
         pending = self._pending_assistant_artifacts.setdefault(chat_session.id, [])
         identity = (artifact["task_frame_id"], artifact["path"])
         pending[:] = [
@@ -3623,55 +3622,46 @@ class AgentLoop:
         )
         self.db.commit()
         return {
-            "tool_name": "staffdeck.create_file",
+            "tool_name": "send_file",
             "success": True,
             "data": {
                 "artifact": artifact,
-                "instruction": (
-                    "文件已登记，StaffDeck 会提供下载入口。在 reply 中简短说明即可。"
-                ),
+                "instruction": "文件已发送并提供下载入口。在 reply 中简短说明即可。",
             },
         }
 
     @staticmethod
-    def _claude_publish_html_tool() -> HarnessTool:
+    def _claude_publish_file_tool() -> HarnessTool:
         return HarnessTool(
-            name="staffdeck.publish_html",
+            name="publish_file",
             description=(
-                "将本轮通过 staffdeck.create_file 创建的 HTML 文件发布为公网链接。"
+                "将本轮通过 send_file 发送的 HTML 文件发布为公网链接。"
                 "只有用户要求公网链接时才调用；成功后必须把返回的 url 告诉用户。"
             ),
             input_schema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"],
+                "properties": {"artifact_id": {"type": "string", "minLength": 1}},
+                "required": ["artifact_id"],
                 "additionalProperties": False,
             },
             effect_level=ToolEffectLevel.WRITE,
         )
 
-    def _execute_claude_html_publish(
+    def _execute_claude_file_publish(
         self,
         arguments: dict[str, Any],
         request: ChatTurnRequest,
         chat_session: ChatSession,
         user_message_id: str,
     ) -> dict[str, Any]:
-        tool_name = "staffdeck.publish_html"
-        try:
-            requested_path = normalize_artifact_path(str(arguments.get("path") or ""))
-        except WorkspaceArtifactError as exc:
-            return {
-                "tool_name": tool_name,
-                "success": False,
-                "error": {"code": "INVALID_ARTIFACT_PATH", "message": str(exc)},
-            }
+        tool_name = "publish_file"
+        requested_artifact_id = str(arguments.get("artifact_id") or "").strip()
         artifact = next(
             (
                 item
                 for item in reversed(self._pending_assistant_artifacts.get(chat_session.id, []))
                 if str(item.get("task_frame_id") or "") == user_message_id
-                and str(item.get("path") or "") == requested_path
+                and str(item.get("artifact_id") or "") == requested_artifact_id
             ),
             None,
         )
@@ -3681,9 +3671,10 @@ class AgentLoop:
                 "success": False,
                 "error": {
                     "code": "ARTIFACT_NOT_FOUND",
-                    "message": "只能发布本轮通过 staffdeck.create_file 创建的文件。",
+                    "message": "只能发布本轮通过 send_file 发送并返回 artifact_id 的文件。",
                 },
             }
+        requested_path = str(artifact.get("path") or "")
         if not requested_path.lower().endswith((".html", ".htm")):
             return {
                 "tool_name": tool_name,
@@ -3700,8 +3691,8 @@ class AgentLoop:
             if not media_type.lower().startswith("text/html"):
                 raise WorkspaceArtifactError("Artifact content type must be text/html.")
             document = data.decode("utf-8")
-            artifact_id = f"{chat_session.id}-{new_id('artifact')}"
-            url = self.html_artifacts.publish_document(document, artifact_id)
+            publication_id = f"{chat_session.id}-{requested_artifact_id}"
+            url = self.html_artifacts.publish_document(document, publication_id)
         except (WorkspaceArtifactError, OSError, UnicodeDecodeError) as exc:
             self.events.record(
                 request.tenant_id,
@@ -3757,7 +3748,7 @@ class AgentLoop:
             f"- {item.slug}: {(item.description or item.name).strip()}" for item in ordered
         )
         return HarnessTool(
-            name="staffdeck.load_skill",
+            name="load_skill",
             description=(
                 "按需加载当前数字员工已绑定的专业工作说明。先根据下面的名称和描述判断是否相关；"
                 "普通问候或无关任务不要加载。技能只提供方法，不授予额外工具权限，也不代表 SOP 已激活。\n"
@@ -3791,7 +3782,7 @@ class AgentLoop:
         skill = general_skill_by_slug.get(slug)
         if not skill:
             return {
-                "tool_name": "staffdeck.load_skill",
+                "tool_name": "load_skill",
                 "success": False,
                 "error": {
                     "code": "NOT_ALLOWED",
@@ -3810,7 +3801,7 @@ class AgentLoop:
             )
             self.db.commit()
         return {
-            "tool_name": "staffdeck.load_skill",
+            "tool_name": "load_skill",
             "success": True,
             "data": {
                 "slug": skill.slug,
@@ -3884,10 +3875,10 @@ class AgentLoop:
                 ],
                 "router_suggestion": suggested_sop_id,
                 "instruction": (
-                    "Router 仅建议流程：若现在执行，先调用 staffdeck.activate_sop；"
+                    "Router 仅建议流程：若现在执行，先调用 activate_sop；"
                     "若只需方案或说明，直接回答且不要激活。"
                     if suggested_sop_id
-                    else "直接处理；仅在必要时调用 staffdeck.activate_sop。"
+                    else "直接处理；仅在必要时调用 activate_sop。"
                 ),
             },
             ensure_ascii=False,
