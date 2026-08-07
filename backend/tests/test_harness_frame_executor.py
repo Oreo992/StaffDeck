@@ -150,6 +150,8 @@ async def test_executor_delegates_one_continuous_run_and_keeps_graph_uncommitted
             invoke_capability=invoke,
             resume_session_id="sdk-session-old",
             max_turns=12,
+            system_prompt="你是 QQQ Claude。",
+            runtime_context="保留本轮 Router 与可用 SOP 上下文。",
         )
         db.refresh(frame)
         runs = db.exec(select(HarnessRunRecord)).all()
@@ -162,6 +164,9 @@ async def test_executor_delegates_one_continuous_run_and_keeps_graph_uncommitted
     assert request.tools[1].effect_level.value == "write"
     assert "StaffDeck" not in request.system_prompt
     assert "连续" in request.system_prompt
+    assert request.system_prompt.startswith("你是 QQQ Claude。")
+    assert request.prompt.startswith("保留本轮 Router 与可用 SOP 上下文。")
+    assert "TaskRequirement" in request.prompt
     assert calls == [
         ("catalog.lookup", {"query": "A1"}),
         ("catalog.lookup", {"query": "A2"}),
@@ -176,6 +181,13 @@ async def test_executor_delegates_one_continuous_run_and_keeps_graph_uncommitted
     assert runs[0].task_requirement_json["goal"] == "完成研究"
     assert frame.status == "running"
     assert frame.step_id == "collect"
+    assert request.execute_tool("catalog.lookup", {"query": "late"}) == {
+        "success": False,
+        "error": {
+            "code": "HARNESS_RUN_CLOSED",
+            "message": "本次 Runtime 已结束，不能继续调用能力。",
+        },
+    }
 
 
 @pytest.mark.asyncio

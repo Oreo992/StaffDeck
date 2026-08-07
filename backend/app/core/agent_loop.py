@@ -35,6 +35,9 @@ from app.artifacts.workspace_delivery import (
 )
 from app.core.conversation_context import build_conversation_context
 from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancelled
+from app.core.harness_frame_executor import HarnessFrameExecutor
+from app.core.harness_sop_bridge import structured_output_from_task_result
+from app.core.harness_task_frame_store import TaskFrameStore
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
 from app.core.response_generator import (
     FALLBACK_REPLY,
@@ -43,8 +46,10 @@ from app.core.response_generator import (
     model_failure_suggestion,
 )
 from app.core.router import Router
+from app.core.runtime_tool_manifest import capability_manifest_from_runtime_tools
 from app.core.skill_runtime import SkillRuntime
 from app.core.step_agent import StepAgent
+from app.core.task_request_compiler import TaskRequestCompiler
 from app.core.tool_replay_policy import (
     TOOL_CALL_HISTORY_SLOT,
     TOOL_RESULTS_SLOT,
@@ -69,6 +74,7 @@ from app.db.models import (
 )
 from app.general_skills import GeneralSkillRunner, GeneralSkillSelector
 from app.general_skills.schema import GeneralSkillRunResponse, GeneralSkillSelection
+from app.harness.task_schema import PlannedTaskFrame
 from app.knowledge import KnowledgeService
 from app.knowledge.citations import (
     compact_knowledge_citation_labels,
@@ -83,7 +89,6 @@ from app.memory.service import MemoryService, memory_read
 from app.observability import EventLog
 from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
 from app.runtime.contracts import (
-    HarnessRunRequest,
     HarnessTool,
     SopAuditOutcome,
     ToolEffectLevel,
@@ -2655,6 +2660,39 @@ class AgentLoop:
                     )
                 )
 
+            task_id = f"claude_sop_{user_message_id}_{segment_index}"
+            planned_frame = PlannedTaskFrame(
+                task_id=task_id,
+                kind="sop",
+                decision="continue_active",
+                target_skill_id=active_skill.skill_id,
+                target_step_id=active_step_id,
+                user_intent=request.message,
+                source_message=request.message,
+            )
+            frame_store = TaskFrameStore(self.db)
+            frame_row = frame_store.persist_plan(
+                chat_session,
+                source_turn_id=user_message_id,
+                frames=[planned_frame],
+            )[0]
+            lease_owner = f"claude:{user_message_id}:{segment_index}"
+            claimed_frame = frame_store.claim(frame_row.id, lease_owner)
+            manifest = capability_manifest_from_runtime_tools(
+                harness_tools,
+                namespace="claude-sop",
+            )
+            requirement = TaskRequestCompiler().compile(
+                planned_frame,
+                chat_session,
+                active_skill,
+                manifest,
+                attachments=[
+                    item.model_dump(mode="json") for item in request.attachments
+                ],
+                source_user_message=request.message,
+            )
+
             tool_by_name = {tool.name: tool for tool in segment_tools}
             loaded_general_skill_slugs: set[str] = set()
 
@@ -2806,42 +2844,51 @@ class AgentLoop:
                 if model_config.base_url:
                     environment["ANTHROPIC_BASE_URL"] = model_config.base_url
                 max_budget = (model_config.extra_body_json or {}).get("max_budget_usd")
-                run_request = HarnessRunRequest(
-                    run_id=user_message_id,
-                    model=model_config.model,
-                    api_key=api_key,
-                    prompt=prompt,
-                    system_prompt=self._claude_system_prompt(active_skill, persona_prompt),
-                    tools=harness_tools,
-                    execute_tool=execute_tool,
-                    event_sink=event_sink,
-                    max_turns=max(1, min(int(ui_config.agent_loop_max_actions) * 4, 40)),
-                    max_budget_usd=float(max_budget) if max_budget is not None else None,
-                    environment=environment,
+                frame_result = asyncio.run(
+                    HarnessFrameExecutor(self.db).execute(
+                        claimed_frame,
+                        lease_owner=lease_owner,
+                        requirement=requirement,
+                        runtime=self.claude_runtime,
+                        model=model_config.model,
+                        api_key=api_key,
+                        invoke_capability=execute_tool,
+                        resume_session_id=sdk_session_id,
+                        max_turns=max(
+                            1,
+                            min(int(ui_config.agent_loop_max_actions) * 4, 40),
+                        ),
+                        max_budget_usd=(
+                            float(max_budget) if max_budget is not None else None
+                        ),
+                        event_sink=event_sink,
+                        environment=environment,
+                        system_prompt=self._claude_system_prompt(
+                            active_skill, persona_prompt
+                        ),
+                        runtime_context=prompt,
+                    )
                 )
-                runtime_call = (
-                    self.claude_runtime.resume(sdk_session_id, run_request)
-                    if sdk_session_id
-                    else self.claude_runtime.run_segment(run_request)
-                )
-                run_result = asyncio.run(runtime_call)
+                structured_output = structured_output_from_task_result(frame_result)
                 total_model_calls += 1
-                total_sdk_turns += run_result.num_turns
-                sdk_session_id = run_result.session_id or sdk_session_id
+                total_sdk_turns += frame_result.action_count
+                sdk_session_id = frame_result.runtime_session_id or sdk_session_id
                 runtime_state["sdk_session_id"] = sdk_session_id
                 runtime_state["model_calls"] = total_model_calls
                 runtime_state["sdk_turns"] = total_sdk_turns
+                runtime_state["harness_task_frame_id"] = frame_result.task_frame_id
                 runtime_state.pop("active_run_id", None)
                 chat_session.runtime_state_json = dict(runtime_state)
                 self.db.add(chat_session)
                 self.db.commit()
 
-                if run_result.is_error:
+                if frame_result.status in {"failed", "blocked", "action_budget"}:
+                    error = frame_result.error or {}
                     runtime_state.update(
                         {
                             "status": "failed",
-                            "error_code": run_result.error_code,
-                            "error_message": run_result.error_message,
+                            "error_code": error.get("code"),
+                            "error_message": error.get("message"),
                         }
                     )
                     chat_session.runtime_state_json = dict(runtime_state)
@@ -2851,12 +2898,19 @@ class AgentLoop:
                         "harness_run_failed_closed",
                         self._turn_payload(
                             {
-                                "code": run_result.error_code,
-                                "message": run_result.error_message,
+                                "code": error.get("code"),
+                                "message": error.get("message"),
                                 "fallback": False,
                             },
                             user_message_id,
                         ),
+                    )
+                    frame_store.finish(
+                        claimed_frame.id,
+                        lease_owner,
+                        status="failed",
+                        result=frame_result.model_dump(mode="json"),
+                        error=error,
                     )
                     self.db.commit()
                     return ClaudeSupervisedOutcome(
@@ -2865,7 +2919,9 @@ class AgentLoop:
                             "以避免重复执行工具。请重试或转人工处理。"
                         ),
                         step_result=StepAgentResult(
-                            action="reply", reply=run_result.error_message, is_step_completed=False
+                            action="reply",
+                            reply=str(error.get("message") or ""),
+                            is_step_completed=False,
                         ),
                         tool_result=last_tool_result,
                     )
@@ -2874,7 +2930,7 @@ class AgentLoop:
                     segment,
                     active_skill.content_json or {},
                     chat_session.slots_json or {},
-                    run_result.output,
+                    structured_output,
                     evidence,
                     attempt=repair_attempt,
                     max_repairs=max_repairs,
@@ -2915,16 +2971,23 @@ class AgentLoop:
                             for item in audit.missing_evidence
                             if item.startswith("slot:")
                         ],
-                        "question_summary": run_result.output.user_question
+                        "question_summary": structured_output.user_question
                         or "需要补充信息后继续 SOP。",
                         "turn_id": user_message_id,
                     }
+                    frame_store.finish(
+                        claimed_frame.id,
+                        lease_owner,
+                        status="awaiting_user",
+                        result=frame_result.model_dump(mode="json"),
+                    )
                     self.db.commit()
                     return ClaudeSupervisedOutcome(
-                        reply=run_result.output.user_question or "请补充完成当前 SOP 步骤所需的信息。",
+                        reply=structured_output.user_question
+                        or "请补充完成当前 SOP 步骤所需的信息。",
                         step_result=StepAgentResult(
                             action="ask_user",
-                            reply=run_result.output.user_question,
+                            reply=structured_output.user_question,
                             is_step_completed=False,
                         ),
                         tool_result=last_tool_result,
@@ -2932,6 +2995,20 @@ class AgentLoop:
                 if audit.outcome != SopAuditOutcome.PASSED:
                     runtime_state["status"] = "failed"
                     chat_session.runtime_state_json = dict(runtime_state)
+                    frame_store.finish(
+                        claimed_frame.id,
+                        lease_owner,
+                        status=(
+                            "awaiting_user"
+                            if audit.outcome == SopAuditOutcome.AWAITING_APPROVAL
+                            else "failed"
+                        ),
+                        result=frame_result.model_dump(mode="json"),
+                        error={
+                            "code": f"SOP_AUDIT_{audit.outcome.value.upper()}",
+                            "missing_evidence": audit.missing_evidence,
+                        },
+                    )
                     self.db.commit()
                     return ClaudeSupervisedOutcome(
                         reply=(
@@ -2939,7 +3016,9 @@ class AgentLoop:
                             "请重试或转人工处理。"
                         ),
                         step_result=StepAgentResult(
-                            action="reply", reply=run_result.output.reply, is_step_completed=False
+                            action="reply",
+                            reply=structured_output.reply,
+                            is_step_completed=False,
                         ),
                         tool_result=last_tool_result,
                     )
@@ -2948,7 +3027,7 @@ class AgentLoop:
                 slots.update(audit.accepted_slot_updates)
                 chat_session.slots_json = slots
                 chat_session.awaiting_input_json = None
-                latest_reply = run_result.output.reply or latest_reply
+                latest_reply = structured_output.reply or latest_reply
                 checkpoints = list(runtime_state.get("checkpoints", []))
                 checkpoints.append(
                     {
@@ -2965,6 +3044,12 @@ class AgentLoop:
                 for tool_name in segment.allowed_tool_names:
                     approved_tools.discard(tool_name)
                     evidence.approvals.discard(tool_name)
+                frame_store.finish(
+                    claimed_frame.id,
+                    lease_owner,
+                    status="completed",
+                    result=frame_result.model_dump(mode="json"),
+                )
                 break
             else:
                 return ClaudeSupervisedOutcome(
@@ -3331,34 +3416,79 @@ class AgentLoop:
         if model_config.base_url:
             environment["ANTHROPIC_BASE_URL"] = model_config.base_url
         max_budget = (model_config.extra_body_json or {}).get("max_budget_usd")
-        run_request = HarnessRunRequest(
-            run_id=user_message_id,
-            model=model_config.model,
-            api_key=api_key,
-            prompt=self._claude_conversation_prompt(
-                request, conversation_context, available_sops, suggested_sop_id
-            ),
-            system_prompt=self._claude_conversation_system_prompt(persona_prompt),
-            tools=harness_tools,
-            execute_tool=execute_tool,
-            event_sink=event_sink,
-            max_turns=(
-                3
-                if suggested_sop_id
-                else max(1, min(int(ui_config.agent_loop_max_actions) * 2, 20))
-            ),
-            max_budget_usd=float(max_budget) if max_budget is not None else None,
-            environment=environment,
+        task_id = f"claude_conversation_{user_message_id}"
+        planned_frame = PlannedTaskFrame(
+            task_id=task_id,
+            kind="conversation",
+            decision="answer_only",
+            user_intent=request.message,
+            source_message=request.message,
         )
-        runtime_call = (
-            self.claude_runtime.resume(sdk_session_id, run_request)
-            if sdk_session_id
-            else self.claude_runtime.run_segment(run_request)
+        frame_store = TaskFrameStore(self.db)
+        frame_row = frame_store.persist_plan(
+            chat_session,
+            source_turn_id=user_message_id,
+            frames=[planned_frame],
+        )[0]
+        lease_owner = f"claude:{user_message_id}"
+        claimed_frame = frame_store.claim(frame_row.id, lease_owner)
+        manifest = capability_manifest_from_runtime_tools(
+            harness_tools,
+            namespace="claude-conversation",
         )
-        run_result = asyncio.run(runtime_call)
-        runtime_state["sdk_session_id"] = run_result.session_id or sdk_session_id
+        requirement = TaskRequestCompiler().compile(
+            planned_frame,
+            chat_session,
+            None,
+            manifest,
+            attachments=[item.model_dump(mode="json") for item in request.attachments],
+            source_user_message=request.message,
+        )
+        frame_result = asyncio.run(
+            HarnessFrameExecutor(self.db).execute(
+                claimed_frame,
+                lease_owner=lease_owner,
+                requirement=requirement,
+                runtime=self.claude_runtime,
+                model=model_config.model,
+                api_key=api_key,
+                invoke_capability=execute_tool,
+                resume_session_id=sdk_session_id,
+                max_turns=(
+                    3
+                    if suggested_sop_id
+                    else max(1, min(int(ui_config.agent_loop_max_actions) * 2, 20))
+                ),
+                max_budget_usd=(
+                    float(max_budget) if max_budget is not None else None
+                ),
+                event_sink=event_sink,
+                environment=environment,
+                system_prompt=self._claude_conversation_system_prompt(persona_prompt),
+                runtime_context=self._claude_conversation_prompt(
+                    request,
+                    conversation_context,
+                    available_sops,
+                    suggested_sop_id,
+                ),
+            )
+        )
+        frame_status = (
+            "blocked" if frame_result.status == "action_budget" else frame_result.status
+        )
+        frame_store.finish(
+            claimed_frame.id,
+            lease_owner,
+            status=frame_status,
+            result=frame_result.model_dump(mode="json"),
+            error=frame_result.error,
+        )
+        runtime_state["sdk_session_id"] = frame_result.runtime_session_id or sdk_session_id
         runtime_state["model_calls"] = int(runtime_state.get("model_calls") or 0) + 1
-        runtime_state["sdk_turns"] = int(runtime_state.get("sdk_turns") or 0) + run_result.num_turns
+        runtime_state["sdk_turns"] = (
+            int(runtime_state.get("sdk_turns") or 0) + frame_result.action_count
+        )
+        runtime_state["harness_task_frame_id"] = frame_result.task_frame_id
         runtime_state.pop("active_run_id", None)
 
         activation_source = "claude"
@@ -3459,12 +3589,13 @@ class AgentLoop:
                     )
                 )
 
-        if run_result.is_error:
+        if frame_result.status in {"failed", "blocked", "action_budget"}:
+            error = frame_result.error or {}
             runtime_state.update(
                 {
                     "status": "failed",
-                    "error_code": run_result.error_code,
-                    "error_message": run_result.error_message,
+                    "error_code": error.get("code"),
+                    "error_message": error.get("message"),
                 }
             )
             reply = (
@@ -3477,8 +3608,8 @@ class AgentLoop:
                 "harness_run_failed_closed",
                 self._turn_payload(
                     {
-                        "code": run_result.error_code,
-                        "message": run_result.error_message,
+                        "code": error.get("code"),
+                        "message": error.get("message"),
                         "fallback": False,
                         "runtime_mode": "conversation",
                     },
@@ -3488,12 +3619,12 @@ class AgentLoop:
         else:
             runtime_state.update(
                 {
-                    "status": "completed",
+                    "status": frame_result.status,
                     "error_code": None,
                     "error_message": None,
                 }
             )
-            reply = run_result.output.reply.strip() or run_result.text.strip() or FALLBACK_REPLY
+            reply = frame_result.reply_fragment.strip() or FALLBACK_REPLY
 
         chat_session.runtime_state_json = dict(runtime_state)
         self.db.add(chat_session)

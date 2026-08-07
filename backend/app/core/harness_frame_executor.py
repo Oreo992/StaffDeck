@@ -62,6 +62,8 @@ class HarnessFrameExecutor:
         max_budget_usd: float | None = None,
         event_sink: TraceSink | None = None,
         environment: dict[str, str] | None = None,
+        system_prompt: str | None = None,
+        runtime_context: str | None = None,
     ) -> TaskExecutionResult:
         requirement_snapshot = requirement.model_dump(mode="json")
         capability_snapshot = requirement.capability_manifest.model_dump(mode="json")
@@ -72,8 +74,17 @@ class HarnessFrameExecutor:
             capability_snapshot=capability_snapshot,
         )
         capability_results: list[dict[str, Any]] = []
+        run_open = {"value": True}
 
         def invoke(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            if not run_open["value"]:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "HARNESS_RUN_CLOSED",
+                        "message": "本次 Runtime 已结束，不能继续调用能力。",
+                    },
+                }
             self.runs.renew(
                 run.id,
                 lease_owner=lease_owner,
@@ -86,6 +97,8 @@ class HarnessFrameExecutor:
             return result
 
         def emit(event_type: str, payload: dict[str, Any]) -> None:
+            if not run_open["value"]:
+                return
             self.runs.renew(
                 run.id,
                 lease_owner=lease_owner,
@@ -98,8 +111,8 @@ class HarnessFrameExecutor:
             run_id=run.id,
             model=model,
             api_key=api_key,
-            prompt=_task_prompt(requirement_snapshot),
-            system_prompt=_SYSTEM_PROMPT,
+            prompt=_task_prompt(requirement_snapshot, runtime_context),
+            system_prompt=_combined_system_prompt(system_prompt),
             resume_session_id=resume_session_id,
             tools=_runtime_tools(requirement),
             execute_tool=invoke,
@@ -120,6 +133,8 @@ class HarnessFrameExecutor:
                 task_summary="Runtime 执行异常。",
                 error={"code": "HARNESS_RUNTIME_ERROR", "message": str(exc)},
             )
+        finally:
+            run_open["value"] = False
         self.runs.finish(
             run.id,
             lease_owner=lease_owner,
@@ -144,9 +159,19 @@ def _runtime_tools(requirement: TaskRequirement) -> list[HarnessTool]:
     ]
 
 
-def _task_prompt(requirement_snapshot: dict[str, Any]) -> str:
+def _task_prompt(
+    requirement_snapshot: dict[str, Any],
+    runtime_context: str | None,
+) -> str:
     payload = json.dumps(requirement_snapshot, ensure_ascii=False, separators=(",", ":"))
-    return f"执行以下 TaskRequirement。它是本次执行的完整边界：\n{payload}"
+    prefix = str(runtime_context or "").strip()
+    requirement_prompt = f"执行以下 TaskRequirement。它是本次执行的完整边界：\n{payload}"
+    return f"{prefix}\n\n{requirement_prompt}" if prefix else requirement_prompt
+
+
+def _combined_system_prompt(system_prompt: str | None) -> str:
+    prefix = str(system_prompt or "").strip()
+    return f"{prefix}\n\n{_SYSTEM_PROMPT}" if prefix else _SYSTEM_PROMPT
 
 
 def _execution_result(

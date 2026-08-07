@@ -11,6 +11,8 @@ from app.db.models import (
     AgentEvent,
     ChatSession,
     GeneralSkill,
+    HarnessRunRecord,
+    HarnessTaskFrameRecord,
     HumanHandoffRequest,
     ModelConfig,
     Skill,
@@ -401,7 +403,14 @@ def test_supervised_loop_repairs_with_same_sdk_session_and_commits_only_after_ev
             )
         )
         db.refresh(chat_session)
-
+        frame_rows = db.exec(
+            select(HarnessTaskFrameRecord).where(
+                HarnessTaskFrameRecord.session_id == chat_session.id
+            )
+        ).all()
+        run_rows = db.exec(
+            select(HarnessRunRecord).where(HarnessRunRecord.session_id == chat_session.id)
+        ).all()
         assert outcome.reply == "A1 当前价格为 99 元。"
         assert [item.resume_session_id for item in harness.requests] == [None, "sdk-session-1"]
         assert chat_session.runtime_state_json["sdk_session_id"] == "sdk-session-2"
@@ -412,6 +421,8 @@ def test_supervised_loop_repairs_with_same_sdk_session_and_commits_only_after_ev
             "query",
             "reply",
         ]
+        assert [row.status for row in frame_rows] == ["completed"]
+        assert [row.status for row in run_rows] == ["completed", "completed"]
 
 
 def test_skillless_claude_conversation_reuses_session_with_read_tools_without_sop() -> None:
@@ -464,6 +475,14 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
             )
         )
         db.refresh(chat_session)
+        frame_rows = db.exec(
+            select(HarnessTaskFrameRecord).where(
+                HarnessTaskFrameRecord.session_id == chat_session.id
+            )
+        ).all()
+        run_rows = db.exec(
+            select(HarnessRunRecord).where(HarnessRunRecord.session_id == chat_session.id)
+        ).all()
 
         assert first.reply == "普通对话回复 1"
         assert second.reply == "普通对话回复 2"
@@ -480,6 +499,9 @@ def test_skillless_claude_conversation_reuses_session_with_read_tools_without_so
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert chat_session.slots_json == {"preserved": "value"}
+        assert [row.status for row in frame_rows] == ["completed", "completed"]
+        assert [row.status for row in run_rows] == ["completed", "completed"]
+        assert all(row.capability_snapshot_json for row in run_rows)
 
 
 def test_claude_must_call_publish_file_and_return_the_tool_url(monkeypatch, tmp_path) -> None:
@@ -814,7 +836,7 @@ def test_router_sop_match_is_advisory_until_claude_requests_activation() -> None
         denied = execute_tool("product.price_query", {"product_name": "A1"})
         assert isinstance(denied, dict)
         assert denied["success"] is False
-        assert denied["error"]["code"] == "SOP_ACTIVATION_REQUIRED"
+        assert denied["error"]["code"] == "HARNESS_RUN_CLOSED"
         assert chat_session.active_skill_id is None
         assert chat_session.active_step_id is None
         assert not any(
