@@ -999,9 +999,7 @@ def _stream_process_output_threaded(process, trace, event_sink, attempt):
 def _bash_supported() -> bool:
     if sys.platform == "win32":
         return False
-    if paths.is_frozen():
-        return False
-    return Path("/bin/bash").exists()
+    return not paths.is_frozen()
 
 
 def _emit(trace: list[dict[str, Any]], item: dict[str, Any], event_sink: TraceSink | None = None) -> None:

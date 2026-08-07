@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import selectors
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -488,6 +490,8 @@ def _read_response(
 ) -> dict[str, Any]:
     if proc.stdout is None:
         raise MCPClientError("MCP stdio stdout 不可用。")
+    if os.name == "nt":
+        return _read_response_from_windows_pipe(proc, expected_id, timeout_seconds)
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + max(timeout_seconds, 0.1)
@@ -511,6 +515,44 @@ def _read_response(
                 return payload
     finally:
         selector.close()
+
+
+def _read_response_from_windows_pipe(
+    proc: subprocess.Popen[str],
+    expected_id: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Read a Windows anonymous pipe without selectors, which only accept sockets."""
+
+    if proc.stdout is None:
+        raise MCPClientError("MCP stdio stdout 不可用。")
+    deadline = time.monotonic() + max(timeout_seconds, 0.1)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MCPClientError(f"MCP stdio 等待响应超时：id={expected_id}")
+        lines: queue.Queue[str] = queue.Queue(maxsize=1)
+
+        def read_line(
+            output: Any = proc.stdout,
+            target: queue.Queue[str] = lines,
+        ) -> None:
+            target.put(output.readline())
+
+        threading.Thread(target=read_line, daemon=True).start()
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty as exc:
+            raise MCPClientError(f"MCP stdio 等待响应超时：id={expected_id}") from exc
+        if not line:
+            stderr = _read_stderr(proc)
+            raise MCPClientError(f"MCP stdio server 提前退出。{stderr}".strip())
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("id") == expected_id:
+            return payload
 
 
 def _raise_json_rpc_error(payload: dict[str, Any]) -> None:

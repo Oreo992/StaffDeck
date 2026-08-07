@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 from sqlmodel import Session
@@ -173,7 +173,7 @@ class HarnessFrameExecutor:
                 return result
             try:
                 result = invoke_capability(name, dict(arguments or {}))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - gateway failures become evidence
                 result = {
                     "success": False,
                     "error": {
@@ -217,9 +217,10 @@ class HarnessFrameExecutor:
             environment=dict(environment or {}),
         )
         try:
+            emit("harness.run_bound", {"run_id": run.id})
             runtime_result = await runtime.run_segment(request)
             result = _execution_result(requirement, runtime_result, capability_results)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - runtime boundary must fail closed
             result = TaskExecutionResult(
                 task_frame_id=requirement.task_frame_id,
                 status="failed",
@@ -275,12 +276,17 @@ def _execution_result(
     capability_results: list[dict[str, Any]],
 ) -> TaskExecutionResult:
     if runtime_result.is_error:
+        cancelled = runtime_result.error_code == "runtime_cancelled"
         return TaskExecutionResult(
             task_frame_id=requirement.task_frame_id,
-            status="failed",
-            reply_fragment="当前任务 Runtime 执行失败，请稍后重试。",
+            status="cancelled" if cancelled else "failed",
+            reply_fragment=(
+                "本次执行已取消。"
+                if cancelled
+                else "当前任务 Runtime 执行失败，请稍后重试。"
+            ),
             capability_results=capability_results,
-            task_summary="Runtime 返回错误。",
+            task_summary="Runtime 已取消。" if cancelled else "Runtime 返回错误。",
             action_count=max(0, runtime_result.num_turns),
             runtime_session_id=runtime_result.session_id,
             error={

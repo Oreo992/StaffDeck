@@ -26,7 +26,7 @@ Chat API → Runtime Router
 - M1-C 已接入默认关闭的完成态影子记录；使用独立数据库 Session，失败不影响正式回复。
 - M2-A 已迁入冻结能力清单，可统一投影文件、Tool、Knowledge 与 General Skill。
 - M2-B 已迁入统一 Invoker：执行前复核授权与快照，副作用先审批并使用持久化重放 fence。
-- M3-A 已补齐 HarnessRun 的开始、续租、完成与取消 fence；尚未切换生产路由。
+- M3-A 已补齐 HarnessRun 的开始、续租、完成与取消 fence，并接入生产路由。
 - M3-B 已加入默认关闭的租户 canary 配置与纯路由判定；仅白名单员工的新 Legacy 会话可入选。
 - M3-C 已加入 TaskRequest Compiler：SOP、附件、记忆和冻结能力清单被编译成有界合同，且不会修改旧 Session 状态。
 - M3-D 已加入单次连续 Runtime 的 Frame Executor；Runtime 内部自主循环，外层只维护能力门禁、lease 和候选结果。
@@ -34,7 +34,9 @@ Chat API → Runtime Router
 - M3-E 已将现有 Router 的场景判断转换为 Harness TurnPlan；普通问答不会因会话里已有 SOP 而被强制塞回 SOP。
 - M4-B 已将 Claude 普通对话与 SOP 执行段接入真实 TaskFrame/HarnessRun 生命周期；修复共享 SDK session 但逐轮留痕。
 - M4-C 已将 FrameExecutor 能力调用接入 Invocation Store；同一 TaskFrame 的重复写入跨修复 Run 只执行一次。
-- Harness v2 尚未进入生产路由。
+- 新 Legacy 会话可按租户开关与员工白名单进入 Harness v2；一旦进入便锁定，不会回落旧链路。
+- OpenAI-compatible Runtime 已拥有连续工具循环，且直接复用网页配置的模型、API Key、温度、输出长度和 extra body。
+- 文件下载、公网发布、知识证据、审批、取消和 client turn 重放均已进入生产链路并有端到端回归。
 
 ## 不可破坏的行为契约
 
@@ -46,7 +48,7 @@ Chat API → Runtime Router
 
 ## 分阶段迁移
 
-### M0：合同冻结（进行中）
+### M0：合同冻结（完成）
 
 - 引入不依赖数据库的 Harness 合同、错误和执行上下文。
 - 建立当前 `HarnessTool` 与 v0.3 `HarnessToolSpec` 的无损转换。
@@ -73,23 +75,32 @@ Chat API → Runtime Router
 - [x] 编译不可变 TaskRequirement；保留确定性分支谓词，过滤内部字段、密钥和附件 data URL。
 - [x] 单次调用选定 Runtime 执行完整 TaskRequirement；不移植逐动作重复调用模型的上游 AgentLoop。
 - [x] 将 RouterDecision 纯转换为 TurnPlan；`answer_only` 始终生成普通对话 Frame，只有明确选中 SOP 才生成 SOP Frame。
-- 新建 `legacy` 会话先进入 Harness v2；历史会话按兼容策略逐步放开。
-- 出错明确终止，不在同一 turn 内回退旧 AgentLoop，避免重复副作用。
+- [x] 白名单中新建 `legacy` 会话进入 Harness v2；历史会话保持原执行器。
+- [x] 出错明确终止，不在同一 turn 内回退旧 AgentLoop，避免重复副作用。
 
 ### M4：Claude 共用 v2 基础设施
 
-- Claude SDK 保持自主 loop，只替换工具执行、工作区、附件、receipt 和 lease 实现。
+- [x] Claude SDK 保持自主 loop，只替换工具执行、工作区、附件、receipt 和 lease 实现。
 - [x] 将 Runtime 候选结果和能力网关结果转换为 Supervisor 输出与 EvidenceLedger。
 - [x] Claude 普通对话和 SOP Segment 均持久化冻结能力快照与 Run 结果；Run 结束后能力回调立即失效。
 - [x] 所有 Runtime 能力调用先持久化 claim；写入按逻辑动作键跨 Run 重放，未知结果禁止自动重试。
-- SOP Supervisor 仍是外环控制器，Graph 状态只在证据审计通过后提交。
-- 完成同一 session 的恢复、取消、审批和重复调用验证。
+- [x] SOP Supervisor 仍是外环控制器，Graph 状态只在证据审计通过后提交。
+- [x] 完成同一 session 的恢复、取消、审批和重复调用验证。
 
 ### M5：切换与清理
 
-- 对比任务完成率、模型调用数、修复轮次、越权拦截和执行耗时。
-- 全量通过后移除旧 StepAgent continuation、Reflection 和重复文件链路。
-- 最后清理旧品牌名称；不在迁移中途同时做大范围 UI 改名。
+- [ ] Preview 灰度对比任务完成率、模型调用数、修复轮次、越权拦截和执行耗时。
+- [ ] 灰度通过后仅为历史会话保留旧 StepAgent continuation/Reflection 兼容入口；新会话不再进入它们。
+- [ ] 历史会话自然淘汰后删除旧执行实现；此项不能在部署验证前提前完成。
+- [ ] 最后清理旧品牌名称；不在迁移中途同时做大范围 UI 改名。
+
+## 上线前验证（2026-08-07）
+
+- Backend：`673 passed, 4 skipped`。
+- Harness 核心：自主循环、SOP 修复、写操作确认、知识证据、文件交付、取消与重放均通过。
+- Frontend：TypeScript/Vite 生产构建通过。
+- i18n：`1934` 条英文翻译覆盖通过。
+- Ruff：本次新增 Runtime 文件全规则通过；全仓仍存在迁移前的历史 lint 债务，未在本次大范围改写。
 
 ## 每阶段准入门槛
 

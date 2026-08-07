@@ -82,6 +82,21 @@ def test_canary_fails_closed_when_disabled_or_agent_is_not_allowlisted() -> None
     assert denied.reason == "agent_not_allowlisted"
 
 
+def test_canary_selection_is_sticky_for_existing_harness_session() -> None:
+    session = _session()
+    session.runtime_state_json = {"execution_engine": "harness_v2"}
+
+    selected = select_harness_v2_canary(
+        _config(),
+        session,
+        agent_id="agent-canary",
+        is_new_session=False,
+    )
+
+    assert selected.selected is True
+    assert selected.reason == "session_locked_to_harness_v2"
+
+
 def test_admin_cannot_enable_canary_without_agent_allowlist() -> None:
     engine = create_engine(
         "sqlite://",
@@ -163,4 +178,4 @@ def test_canary_columns_migrate_idempotently_on_existing_ui_config(
         ).scalar_one()
 
     assert {"harness_v2_enabled", "harness_v2_agent_allowlist_json"} <= columns
-    assert enabled in {0, False}
+    assert enabled == 0

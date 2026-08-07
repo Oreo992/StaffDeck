@@ -99,7 +99,7 @@ def test_read_tool_uses_existing_executor_and_records_completed_invocation(
     engine = _memory_engine()
     calls: list[tuple[str, str | None]] = []
 
-    def fake_execute(self, tenant_id, tool_call, active_skill_id=None, agent_id=None):  # noqa: ANN001
+    def fake_execute(self, tenant_id, tool_call, active_skill_id=None, agent_id=None):
         calls.append((tool_call.name, agent_id))
         return ToolResult(tool_name=tool_call.name, success=True, data={"asin": "A1"})
 
@@ -117,13 +117,47 @@ def test_read_tool_uses_existing_executor_and_records_completed_invocation(
     assert records[0].status == "completed"
 
 
+def test_outer_frame_executor_can_own_invocation_fence_without_double_claim(
+    monkeypatch,
+) -> None:
+    engine = _memory_engine()
+
+    def fake_execute(self, tenant_id, tool_call, active_skill_id=None, agent_id=None):
+        return ToolResult(tool_name=tool_call.name, success=True, data={"asin": "A1"})
+
+    monkeypatch.setattr(ToolExecutor, "execute", fake_execute)
+    with Session(engine) as db:
+        agent, chat_session, _tool = _seed(db)
+        manifest = CapabilityManifestBuilder(db).build(
+            "tenant-demo", agent.id, None, None
+        )
+        invoker = HarnessCapabilityInvoker(
+            db,
+            tenant_id="tenant-demo",
+            session=chat_session,
+            task_frame_id="task-1",
+            run_id="run-1",
+            manifest=manifest,
+            agent_id=agent.id,
+            active_skill=None,
+            active_step_id=None,
+            persist_invocations=False,
+        )
+
+        result = invoker.invoke("product.lookup", {"asin": "A1"})
+        records = db.exec(select(HarnessInvocationRecord)).all()
+
+    assert result["success"] is True
+    assert records == []
+
+
 def test_write_tool_requires_approval_and_replays_without_second_side_effect(
     monkeypatch,
 ) -> None:
     engine = _memory_engine()
     calls = 0
 
-    def fake_execute(self, tenant_id, tool_call, active_skill_id=None, agent_id=None):  # noqa: ANN001
+    def fake_execute(self, tenant_id, tool_call, active_skill_id=None, agent_id=None):
         nonlocal calls
         calls += 1
         return ToolResult(tool_name=tool_call.name, success=True, data={"sent": True})
@@ -157,7 +191,7 @@ def test_file_capability_uses_runtime_handler_only_after_approval() -> None:
     engine = _memory_engine()
     sent: list[str] = []
 
-    def send_file(arguments):  # noqa: ANN001
+    def send_file(arguments):
         sent.append(arguments["filename"])
         return {"success": True, "data": {"artifact_id": "artifact-1"}}
 
@@ -194,7 +228,7 @@ def test_unknown_write_failure_keeps_fence_and_blocks_retry() -> None:
     engine = _memory_engine()
     calls = 0
 
-    def uncertain_send(_arguments):  # noqa: ANN001
+    def uncertain_send(_arguments):
         nonlocal calls
         calls += 1
         return {
@@ -277,7 +311,7 @@ def test_knowledge_search_intersects_requested_ids_with_frozen_scope(
     engine = _memory_engine()
     captured: dict[str, object] = {}
 
-    def fake_search(self, request, model_config=None):  # noqa: ANN001
+    def fake_search(self, request, model_config=None):
         captured["ids"] = request.knowledge_base_ids
         captured["query"] = request.query
         return KnowledgeSearchResponse(evidence_pack=[{"content": "真实资料"}])
@@ -317,13 +351,15 @@ def test_knowledge_search_intersects_requested_ids_with_frozen_scope(
 
     assert denied["error"]["code"] == "KNOWLEDGE_NOT_AVAILABLE"
     assert result["success"] is True
+    assert result["citations"][0]["kind"] == "evidence"
+    assert result["citations"][0]["content"] == "真实资料"
     assert captured == {"ids": ["kb-market"], "query": "A1"}
 
 
 def test_changed_tool_snapshot_is_rejected_before_executor(monkeypatch) -> None:
     engine = _memory_engine()
 
-    def fail_execute(*_args, **_kwargs):  # noqa: ANN002, ANN003
+    def fail_execute(*_args, **_kwargs):
         raise AssertionError("changed capability must not execute")
 
     monkeypatch.setattr(ToolExecutor, "execute", fail_execute)

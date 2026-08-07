@@ -1,4 +1,5 @@
 import base64
+import sys
 
 from fastapi import HTTPException
 from io import BytesIO
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 from zipfile import ZipFile
+
+import pytest
 
 from app.api.general_skills import (
     archive_general_skill,
@@ -1900,6 +1903,7 @@ def test_general_skill_runner_materializes_folder_package(monkeypatch) -> None:
     assert calls == ["runner", "review", "reply"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Bash package runtime is not supported on Windows")
 def test_general_skill_runner_executes_bash_package_command(monkeypatch) -> None:
     calls: list[str] = []
 

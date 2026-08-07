@@ -201,3 +201,4 @@ def test_task_execution_result_has_closed_status_contract() -> None:
     )
 
     assert result.status == "awaiting_user"
+    assert TaskExecutionResult(task_frame_id="task_2", status="cancelled").status == "cancelled"

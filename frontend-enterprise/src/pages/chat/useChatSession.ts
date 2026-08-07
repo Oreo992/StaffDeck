@@ -365,6 +365,8 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     show_tool_trace: true,
     reflection_max_rounds: 1,
     agent_loop_max_actions: 6,
+    harness_v2_enabled: false,
+    harness_v2_agent_allowlist: [],
     claude_runtime_enabled: false,
     claude_model_config_id: null,
     claude_skill_allowlist: [],

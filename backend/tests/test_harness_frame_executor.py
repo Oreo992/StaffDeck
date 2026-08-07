@@ -256,6 +256,35 @@ async def test_executor_fails_closed_when_runtime_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_executor_persists_runtime_cancellation_as_cancelled() -> None:
+    engine = _memory_engine()
+    runtime = _FakeRuntime(
+        HarnessRunResult(
+            is_error=True,
+            error_code="runtime_cancelled",
+            error_message="request cancelled",
+            num_turns=1,
+        )
+    )
+    with Session(engine) as db:
+        frame = _claimed_frame(db)
+        result = await HarnessFrameExecutor(db).execute(
+            frame,
+            lease_owner="worker-1",
+            requirement=_requirement(),
+            runtime=runtime,
+            model="claude-test",
+            api_key="secret",
+            invoke_capability=lambda _name, _arguments: {"success": True},
+        )
+        run = db.exec(select(HarnessRunRecord)).one()
+
+    assert result.status == "cancelled"
+    assert result.reply_fragment == "本次执行已取消。"
+    assert run.status == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_executor_replays_duplicate_write_without_repeating_side_effect() -> None:
     engine = _memory_engine()
     side_effects: list[dict[str, Any]] = []

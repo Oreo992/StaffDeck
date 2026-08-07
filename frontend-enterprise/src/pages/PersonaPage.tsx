@@ -28,6 +28,8 @@ type UiConfigForm = {
   show_tool_trace: boolean;
   reflection_max_rounds: string;
   agent_loop_max_actions: string;
+  harness_v2_enabled: boolean;
+  harness_v2_agent_allowlist: string;
   claude_runtime_enabled: boolean;
   claude_model_config_id: string;
   claude_skill_allowlist: string;
@@ -41,6 +43,8 @@ const DEFAULT_UI_CONFIG: UiConfigForm = {
   show_tool_trace: true,
   reflection_max_rounds: '1',
   agent_loop_max_actions: '6',
+  harness_v2_enabled: false,
+  harness_v2_agent_allowlist: '',
   claude_runtime_enabled: false,
   claude_model_config_id: '',
   claude_skill_allowlist: '',
@@ -83,6 +87,8 @@ export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) 
           show_tool_trace: row.show_tool_trace,
           reflection_max_rounds: String(row.reflection_max_rounds),
           agent_loop_max_actions: String(row.agent_loop_max_actions),
+          harness_v2_enabled: row.harness_v2_enabled,
+          harness_v2_agent_allowlist: row.harness_v2_agent_allowlist.join('\n'),
           claude_runtime_enabled: row.claude_runtime_enabled,
           claude_model_config_id: row.claude_model_config_id || '',
           claude_skill_allowlist: row.claude_skill_allowlist.join('\n'),
@@ -205,12 +211,23 @@ export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) 
       .split(/[\n,，]/)
       .map((item) => item.trim())
       .filter(Boolean);
+    const harnessAgentAllowlist = uiForm.harness_v2_agent_allowlist
+      .split(/[\n,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
     if (
       Number.isNaN(reflectionMaxRounds)
       || Number.isNaN(agentLoopMaxActions)
       || Number.isNaN(claudeMaxRepairRounds)
     ) {
       notify.error('执行轮数设置必须是数字');
+      return;
+    }
+    if (
+      uiForm.harness_v2_enabled
+      && harnessAgentAllowlist.length === 0
+    ) {
+      notify.error('启用 Harness v2 前请填写员工 ID 白名单');
       return;
     }
     if (
@@ -229,6 +246,8 @@ export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) 
         show_tool_trace: uiForm.show_tool_trace,
         reflection_max_rounds: reflectionMaxRounds,
         agent_loop_max_actions: agentLoopMaxActions,
+        harness_v2_enabled: uiForm.harness_v2_enabled,
+        harness_v2_agent_allowlist: harnessAgentAllowlist,
         claude_runtime_enabled: uiForm.claude_runtime_enabled,
         claude_model_config_id: uiForm.claude_model_config_id || null,
         claude_skill_allowlist: claudeSkillAllowlist,
@@ -282,7 +301,7 @@ export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) 
       </Card>
       {isAdmin && <Card className="editor-card settings-card">
         <CardHeader>
-          <CardTitle>执行记录与 Claude Runtime（管理员全局）</CardTitle>
+          <CardTitle>执行记录与 Runtime（管理员全局）</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-[16px]">
           <SwitchRow label="展示思考状态" checked={uiForm.show_thinking_trace} onChange={(next) => updateUiConfig({ show_thinking_trace: next })} />
@@ -306,6 +325,23 @@ export default function PersonaPage({ isAdmin = false }: { isAdmin?: boolean }) 
               step={1}
               value={uiForm.agent_loop_max_actions}
               onChange={(event) => updateUiConfig({ agent_loop_max_actions: event.target.value })}
+            />
+          </LabeledField>
+          <div className="my-[2px] h-px bg-border" />
+          <SwitchRow
+            label="启用 Legacy Harness v2"
+            checked={uiForm.harness_v2_enabled}
+            onChange={(next) => updateUiConfig({ harness_v2_enabled: next })}
+          />
+          <LabeledField
+            label="Harness v2 员工 ID 白名单"
+            hint="仅白名单员工的新 Legacy 会话进入自主 Harness；已进入的会话会保持原执行器。"
+          >
+            <Textarea
+              rows={3}
+              value={uiForm.harness_v2_agent_allowlist}
+              placeholder={'agent_canary\nagent_research'}
+              onChange={(event) => updateUiConfig({ harness_v2_agent_allowlist: event.target.value })}
             />
           </LabeledField>
           <div className="my-[2px] h-px bg-border" />

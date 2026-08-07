@@ -320,6 +320,8 @@ export type UIConfigRead = {
   show_tool_trace: boolean;
   reflection_max_rounds: number;
   agent_loop_max_actions: number;
+  harness_v2_enabled: boolean;
+  harness_v2_agent_allowlist: string[];
   claude_runtime_enabled: boolean;
   claude_model_config_id?: string | null;
   claude_skill_allowlist: string[];

@@ -38,6 +38,7 @@ from app.core.cancellation import clear_chat_turn_cancelled, is_chat_turn_cancel
 from app.core.harness_frame_executor import HarnessFrameExecutor
 from app.core.harness_sop_bridge import structured_output_from_task_result
 from app.core.harness_task_frame_store import TaskFrameStore
+from app.core.harness_v2_routing import select_harness_v2_canary
 from app.core.reflection_agent import ReflectionAgent, ReflectionDecision, action_needs_reflection
 from app.core.response_generator import (
     FALLBACK_REPLY,
@@ -88,6 +89,7 @@ from app.memory.jobs import enqueue_memory_capture
 from app.memory.service import MemoryService, memory_read
 from app.observability import EventLog
 from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
+from app.runtime.openai_compatible import OpenAICompatibleRuntimeAdapter
 from app.runtime.contracts import (
     HarnessTool,
     SopAuditOutcome,
@@ -328,7 +330,9 @@ class AgentLoop:
         self.tool_executor = ToolExecutor(db)
         self.memory = MemoryService(db)
         self.claude_runtime = ClaudeAgentSdkAdapter()
+        self.legacy_harness_runtime = OpenAICompatibleRuntimeAdapter()
         self.sop_supervisor = SopSupervisor()
+        self.harness_v2_engine_factory: Callable[[Any], Any] | None = None
         self._validated_general_skill_calls: set[tuple[str, str, str]] = set()
         self._pending_assistant_artifacts: dict[str, list[dict[str, Any]]] = {}
 
@@ -433,6 +437,8 @@ class AgentLoop:
         return remaining
 
     def handle_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
+        if self._request_uses_harness_v2_runtime(request):
+            return self._run_harness_v2_engine(request)
         if self._request_uses_claude_supervised_runtime(request):
             return self._consume_claude_supervised_stream(request)
         router_decision: RouterDecision | None = None
@@ -660,6 +666,68 @@ class AgentLoop:
             chat_session
             and chat_session.tenant_id == request.tenant_id
             and self._is_claude_supervised_session(chat_session)
+        )
+
+    def _request_uses_harness_v2_runtime(self, request: ChatTurnRequest) -> bool:
+        if not hasattr(self.db, "get"):
+            return False
+        existing = self.db.get(ChatSession, request.session_id) if request.session_id else None
+        if existing is not None:
+            probe = existing
+        else:
+            agent = self.db.get(AgentProfile, request.agent_id) if request.agent_id else None
+            probe = ChatSession(
+                id=request.session_id or "harness_route_probe",
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
+                agent_id=request.agent_id,
+                runtime_mode=resolve_agent_runtime_mode(agent, request.runtime_mode),
+            )
+        decision = select_harness_v2_canary(
+            self.db.get(UIConfig, request.tenant_id),
+            probe,
+            agent_id=request.agent_id or probe.agent_id,
+            is_new_session=existing is None,
+        )
+        return decision.selected
+
+    def _run_harness_v2_engine(self, request: ChatTurnRequest) -> ChatTurnResponse:
+        factory = self.harness_v2_engine_factory
+        if factory is None:
+            from app.core.harness_v2_engine import LegacyHarnessV2Engine
+
+            factory = LegacyHarnessV2Engine
+        engine = factory(self)
+        try:
+            return engine.run(request)
+        finally:
+            engine.close()
+
+    def _stream_harness_v2_response(
+        self, request: ChatTurnRequest
+    ) -> Iterator[dict[str, object]]:
+        response = self._run_harness_v2_engine(request)
+        chat_session = self.db.get(ChatSession, response.session_id)
+        if chat_session is None:
+            raise AgentLoopPreconditionError(
+                "harness_v2_incomplete",
+                "Harness v2 未能持久化本次会话。",
+            )
+        for chunk in self.response_generator.chunk_text(response.reply):
+            yield self._stream_event(
+                "stream_delta",
+                chat_session,
+                {"content": chunk, "execution_engine": "harness_v2"},
+            )
+        yield self._stream_event(
+            "stream_end",
+            chat_session,
+            {"execution_engine": "harness_v2"},
+        )
+        yield self._stream_event(
+            "complete",
+            chat_session,
+            response.model_dump(mode="json"),
         )
 
     def _consume_claude_supervised_stream(self, request: ChatTurnRequest) -> ChatTurnResponse:
@@ -1454,6 +1522,9 @@ class AgentLoop:
         )
 
     def handle_turn_stream(self, request: ChatTurnRequest) -> Iterator[dict[str, object]]:
+        if self._request_uses_harness_v2_runtime(request):
+            yield from self._stream_harness_v2_response(request)
+            return
         router_decision: RouterDecision | None = None
         step_result = StepAgentResult()
         tool_result: ToolResult | None = None
@@ -3826,6 +3897,10 @@ class AgentLoop:
             document = data.decode("utf-8")
             publication_id = f"{chat_session.id}-{requested_artifact_id}"
             url = self.html_artifacts.publish_document(document, publication_id)
+            # Keep the publication attached to the same artifact that is exposed
+            # on the assistant message.  The model still has to call publish_file;
+            # this only records the verified result for the client and audit trail.
+            artifact["public_url"] = url
         except (WorkspaceArtifactError, OSError, UnicodeDecodeError) as exc:
             self.events.record(
                 request.tenant_id,

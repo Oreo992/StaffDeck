@@ -18,6 +18,7 @@ from app.core.harness_invocation_store import (
 )
 from app.db.models import ChatSession, GeneralSkill, ModelConfig, Skill, Tool, new_id
 from app.general_skills.runner import GeneralSkillRunner
+from app.knowledge.citations import knowledge_citations_from_results
 from app.knowledge.schema import KnowledgeSearchRequest
 from app.knowledge.service import KnowledgeService
 from app.tools.tool_executor import ToolExecutor
@@ -48,6 +49,8 @@ class HarnessCapabilityInvoker:
         approval_checker: ApprovalChecker | None = None,
         file_handlers: dict[str, CapabilityHandler] | None = None,
         trace_sink: TraceSink | None = None,
+        persist_invocations: bool = True,
+        authorized_step_ids: list[str] | None = None,
     ) -> None:
         self.db = db
         self.tenant_id = tenant_id
@@ -63,6 +66,10 @@ class HarnessCapabilityInvoker:
         self.approval_checker = approval_checker
         self.file_handlers = dict(file_handlers or {})
         self.trace_sink = trace_sink
+        self.persist_invocations = persist_invocations
+        self.authorized_step_ids = [
+            str(item) for item in (authorized_step_ids or []) if str(item)
+        ]
         self._descriptors = {
             item.name: item for item in manifest.available if item.available
         }
@@ -95,6 +102,14 @@ class HarnessCapabilityInvoker:
                 "APPROVAL_REQUIRED",
                 "该能力可能产生副作用，必须先获得明确批准。",
                 effect_level=effective_effect,
+            )
+
+        if not self.persist_invocations:
+            return self._dispatch_with_trace(
+                descriptor,
+                current,
+                arguments,
+                effective_effect,
             )
 
         action_key = None
@@ -137,13 +152,44 @@ class HarnessCapabilityInvoker:
         )
         try:
             result = self._dispatch(descriptor, current, arguments)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - capability failures are normalized
             result = _failure("CAPABILITY_EXECUTION_ERROR", str(exc))
         self._invocations.finish(
             claim.record,
             result,
             definitely_not_sent=_failure_was_not_sent(result),
         )
+        self._emit(
+            "capability_invocation_finished",
+            {
+                "capability_id": descriptor.capability_id,
+                "name": descriptor.name,
+                "success": result.get("success") is True,
+                "result": _audit_result(result),
+            },
+        )
+        return result
+
+    def _dispatch_with_trace(
+        self,
+        descriptor: CapabilityDescriptor,
+        current: CapabilityDescriptor,
+        arguments: dict[str, Any],
+        effective_effect: str,
+    ) -> dict[str, Any]:
+        self._emit(
+            "capability_invocation_started",
+            {
+                "capability_id": descriptor.capability_id,
+                "name": descriptor.name,
+                "effect_level": effective_effect,
+                "arguments": _audit_arguments(arguments),
+            },
+        )
+        try:
+            result = self._dispatch(descriptor, current, arguments)
+        except Exception as exc:  # noqa: BLE001 - capability failures are normalized
+            result = _failure("CAPABILITY_EXECUTION_ERROR", str(exc))
         self._emit(
             "capability_invocation_finished",
             {
@@ -248,7 +294,15 @@ class HarnessCapabilityInvoker:
             ),
             self.model_config,
         )
-        return {"success": True, "data": response.model_dump(mode="json")}
+        data = response.model_dump(mode="json")
+        return {
+            "success": True,
+            "data": data,
+            # SOP evidence must come from an objective gateway result, not from
+            # the model's prose.  Expose normalized citations at the result root
+            # so HarnessFrameExecutor can place them in TaskExecutionResult.
+            "citations": knowledge_citations_from_results([data]),
+        }
 
     def _invoke_general_skill(
         self,
@@ -312,13 +366,16 @@ class HarnessCapabilityInvoker:
         self,
         frozen: CapabilityDescriptor,
     ) -> CapabilityDescriptor | None:
-        manifest = CapabilityManifestBuilder(self.db).build(
-            self.tenant_id,
-            self.agent_id,
-            self.active_skill,
-            self.active_step_id,
-        )
-        for item in manifest.available:
+        manifests = [
+            CapabilityManifestBuilder(self.db).build(
+                self.tenant_id,
+                self.agent_id,
+                self.active_skill,
+                step_id,
+            )
+            for step_id in (self.authorized_step_ids or [self.active_step_id])
+        ]
+        for item in [item for manifest in manifests for item in manifest.available]:
             if (
                 item.available
                 and item.capability_id == frozen.capability_id

@@ -20,6 +20,15 @@ def select_harness_v2_canary(
 ) -> HarnessV2RouteDecision:
     """Select only allowlisted new Legacy sessions; never alter persisted mode."""
 
+    runtime_state = (
+        chat_session.runtime_state_json
+        if isinstance(chat_session.runtime_state_json, dict)
+        else {}
+    )
+    if runtime_state.get("execution_engine") == "harness_v2":
+        if chat_session.runtime_mode != "legacy":
+            return HarnessV2RouteDecision(False, "runtime_mode_not_legacy")
+        return HarnessV2RouteDecision(True, "session_locked_to_harness_v2")
     if ui_config is None or not ui_config.harness_v2_enabled:
         return HarnessV2RouteDecision(False, "harness_v2_disabled")
     if chat_session.runtime_mode != "legacy":

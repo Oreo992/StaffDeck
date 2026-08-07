@@ -25,6 +25,7 @@ from app.core import AgentLoop
 from app.core.cancellation import cancel_chat_turn
 from app.core.harness_shadow_recorder import record_harness_v2_shadow_turn
 from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
+from app.runtime.openai_compatible import OpenAICompatibleRuntimeAdapter
 from app.db import engine, get_session
 from app.db.models import (
     AgentEvent,
@@ -1310,9 +1311,11 @@ def cancel_chat_turn_endpoint(
     chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, session_id)
     cancel_chat_turn(session_id, request.turn_id)
     ClaudeAgentSdkAdapter().cancel(request.turn_id)
+    OpenAICompatibleRuntimeAdapter().cancel(request.turn_id)
     active_run_id = str((chat_session.runtime_state_json or {}).get("active_run_id") or "")
     if active_run_id and active_run_id != request.turn_id:
         ClaudeAgentSdkAdapter().cancel(active_run_id)
+        OpenAICompatibleRuntimeAdapter().cancel(active_run_id)
     _persist_chat_turn_cancelled(db, request.tenant_id, chat_session, request.turn_id, current_user.id)
     db.commit()
     return {"ok": True}

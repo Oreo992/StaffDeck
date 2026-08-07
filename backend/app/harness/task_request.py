@@ -37,6 +37,7 @@ class TaskExecutionResult(BaseModel):
         "failed",
         "blocked",
         "action_budget",
+        "cancelled",
     ]
     reply_fragment: str = ""
     slot_updates: dict[str, Any] = Field(default_factory=dict)
