@@ -29,6 +29,8 @@ class UIConfigRead(BaseModel):
     claude_model_config_id: str | None
     claude_skill_allowlist: list[str]
     claude_max_repair_rounds: int
+    harness_v2_enabled: bool
+    harness_v2_agent_allowlist: list[str]
     updated_at: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -45,6 +47,8 @@ class UIConfigUpdateRequest(BaseModel):
     claude_model_config_id: str | None = None
     claude_skill_allowlist: list[str] = Field(default_factory=list)
     claude_max_repair_rounds: int = Field(default=2, ge=0, le=5)
+    harness_v2_enabled: bool | None = None
+    harness_v2_agent_allowlist: list[str] | None = None
 
 
 def ui_config_read(row: UIConfig) -> UIConfigRead:
@@ -59,6 +63,8 @@ def ui_config_read(row: UIConfig) -> UIConfigRead:
         claude_model_config_id=row.claude_model_config_id,
         claude_skill_allowlist=row.claude_skill_allowlist_json or [],
         claude_max_repair_rounds=row.claude_max_repair_rounds,
+        harness_v2_enabled=row.harness_v2_enabled,
+        harness_v2_agent_allowlist=row.harness_v2_agent_allowlist_json or [],
         updated_at=row.updated_at.isoformat(),
     )
 
@@ -114,6 +120,17 @@ def update_enterprise_ui_config(
     row.claude_model_config_id = request.claude_model_config_id
     row.claude_skill_allowlist_json = list(dict.fromkeys(request.claude_skill_allowlist))
     row.claude_max_repair_rounds = request.claude_max_repair_rounds
+    if request.harness_v2_enabled is True and not request.harness_v2_agent_allowlist:
+        raise HTTPException(
+            status_code=400,
+            detail="Harness v2 agent allowlist is required",
+        )
+    if request.harness_v2_enabled is not None:
+        row.harness_v2_enabled = request.harness_v2_enabled
+    if request.harness_v2_agent_allowlist is not None:
+        row.harness_v2_agent_allowlist_json = list(
+            dict.fromkeys(request.harness_v2_agent_allowlist)
+        )
     row.updated_at = utc_now()
     db.add(row)
     db.commit()

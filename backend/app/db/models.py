@@ -350,6 +350,10 @@ class UIConfig(SQLModel, table=True):
     claude_model_config_id: Optional[str] = None
     claude_skill_allowlist_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     claude_max_repair_rounds: int = 2
+    harness_v2_enabled: bool = False
+    harness_v2_agent_allowlist_json: list[str] = Field(
+        default_factory=list, sa_column=Column(JSON)
+    )
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

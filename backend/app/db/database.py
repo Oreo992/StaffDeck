@@ -179,6 +179,25 @@ def _migrate_sqlite_skill_schema() -> None:
                         "INTEGER NOT NULL DEFAULT 2"
                     )
                 )
+            if "harness_v2_enabled" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN harness_v2_enabled "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            if "harness_v2_agent_allowlist_json" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN "
+                        "harness_v2_agent_allowlist_json JSON"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE ui_configs SET harness_v2_agent_allowlist_json = '[]'"
+                    )
+                )
 
         if "skill_feedback" in tables:
             feedback_columns = {column["name"] for column in inspector.get_columns("skill_feedback")}
