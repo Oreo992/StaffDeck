@@ -21,6 +21,7 @@ Chat API → Runtime Router
 - 当前 Claude Runtime 已具备连续 SDK session、SOP Supervisor、证据审计、修复循环和显式文件发布。
 - 第一批已迁入纯基础合同：`app.harness.contracts`、`errors`、`execution_context`。
 - `app.runtime.v2_compat` 已保证工具副作用双向映射：`read → read`、`write → write`、`destructive → delete`。
+- M1-A 已迁入五类生命周期表、Turn receipt Store 与 Session lease Store；目前没有生产调用者。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -41,8 +42,10 @@ Chat API → Runtime Router
 
 ### M1：持久化生命周期
 
-- 增量加入 `HarnessTaskFrameRecord`、`HarnessRunRecord`、`HarnessTurnRecord`、`HarnessSessionLeaseRecord`、`HarnessInvocationRecord`。
-- 迁入 session lease、turn receipt、TaskFrame store 和 invocation replay policy。
+- [x] 增量加入 `HarnessTaskFrameRecord`、`HarnessRunRecord`、`HarnessTurnRecord`、`HarnessSessionLeaseRecord`、`HarnessInvocationRecord`。
+- [x] 迁入 session lease 和 turn receipt，验证并发 fence、完成响应重放与请求摘要冲突。
+- [ ] 迁入 TaskFrame store 和 invocation replay policy。
+- [ ] 使用独立数据库 Session 做影子写入；不能直接复用 AgentLoop 的长事务 Session。
 - 先影子写入并核对，不改变现有响应路径；数据库升级必须可重复执行。
 
 ### M2：统一能力层

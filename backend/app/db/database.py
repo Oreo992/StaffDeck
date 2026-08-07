@@ -69,6 +69,7 @@ def _migrate_sqlite_skill_schema() -> None:
     legacy_id_prefix = f"{legacy_key}_"
     with engine.begin() as conn:
         _migrate_default_model_output_limit(conn, tables)
+        _migrate_harness_v2_schema(conn, inspector, tables)
 
         if "model_configs" in tables:
             model_config_columns = {
@@ -288,6 +289,153 @@ def _migrate_sqlite_skill_schema() -> None:
             _normalize_agent_branch_rows(conn, tables)
             _seed_agent_branch_state(conn, inspector, tables)
             _sync_explicit_skill_tool_bindings(conn, tables)
+
+
+def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
+    """Repair Harness v2 tables created by an older application version."""
+
+    if "harness_task_frames" in tables:
+        task_frame_columns = {
+            column["name"] for column in inspector.get_columns("harness_task_frames")
+        }
+        task_frame_column_sql = {
+            "decision": (
+                "ALTER TABLE harness_task_frames ADD COLUMN decision "
+                "VARCHAR NOT NULL DEFAULT 'answer_only'"
+            ),
+            "attempt_no": (
+                "ALTER TABLE harness_task_frames ADD COLUMN attempt_no "
+                "INTEGER NOT NULL DEFAULT 0"
+            ),
+            "lease_owner": "ALTER TABLE harness_task_frames ADD COLUMN lease_owner VARCHAR",
+            "lease_expires_at": (
+                "ALTER TABLE harness_task_frames ADD COLUMN lease_expires_at DATETIME"
+            ),
+        }
+        for column_name, ddl in task_frame_column_sql.items():
+            if column_name not in task_frame_columns:
+                conn.execute(text(ddl))
+        conn.execute(
+            text(
+                "UPDATE harness_task_frames SET decision = 'answer_only' "
+                "WHERE decision IS NULL OR decision = ''"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE harness_task_frames SET attempt_no = 0 "
+                "WHERE attempt_no IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_task_frames_decision "
+                "ON harness_task_frames(decision)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_task_frames_lease_owner "
+                "ON harness_task_frames(lease_owner)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_task_frames_lease_expires_at "
+                "ON harness_task_frames(lease_expires_at)"
+            )
+        )
+
+    if "harness_runs" in tables:
+        run_columns = {column["name"] for column in inspector.get_columns("harness_runs")}
+        run_column_sql = {
+            "attempt_no": (
+                "ALTER TABLE harness_runs ADD COLUMN attempt_no "
+                "INTEGER NOT NULL DEFAULT 1"
+            ),
+            "lease_owner": "ALTER TABLE harness_runs ADD COLUMN lease_owner VARCHAR",
+            "lease_expires_at": (
+                "ALTER TABLE harness_runs ADD COLUMN lease_expires_at DATETIME"
+            ),
+        }
+        for column_name, ddl in run_column_sql.items():
+            if column_name not in run_columns:
+                conn.execute(text(ddl))
+        conn.execute(
+            text("UPDATE harness_runs SET attempt_no = 1 WHERE attempt_no IS NULL")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_runs_lease_owner "
+                "ON harness_runs(lease_owner)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_runs_lease_expires_at "
+                "ON harness_runs(lease_expires_at)"
+            )
+        )
+
+    if "harness_invocations" not in tables:
+        return
+
+    invocation_columns = {
+        column["name"] for column in inspector.get_columns("harness_invocations")
+    }
+    invocation_column_sql = {
+        "logical_action_key": (
+            "ALTER TABLE harness_invocations ADD COLUMN logical_action_key VARCHAR"
+        ),
+        "replayed_from_invocation_id": (
+            "ALTER TABLE harness_invocations "
+            "ADD COLUMN replayed_from_invocation_id VARCHAR"
+        ),
+        "response_cache_json": (
+            "ALTER TABLE harness_invocations ADD COLUMN response_cache_json "
+            "JSON NOT NULL DEFAULT '{}'"
+        ),
+    }
+    for column_name, ddl in invocation_column_sql.items():
+        if column_name not in invocation_columns:
+            conn.execute(text(ddl))
+    conn.execute(
+        text(
+            "UPDATE harness_invocations SET response_cache_json = '{}' "
+            "WHERE response_cache_json IS NULL"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_harness_invocations_replayed_from_invocation_id "
+            "ON harness_invocations(replayed_from_invocation_id)"
+        )
+    )
+
+    logical_action_index = next(
+        (
+            index
+            for index in inspector.get_indexes("harness_invocations")
+            if index["name"] == "ix_harness_invocations_logical_action_key"
+        ),
+        None,
+    )
+    if logical_action_index and (
+        not logical_action_index.get("unique")
+        or logical_action_index.get("column_names") != ["logical_action_key"]
+    ):
+        conn.execute(
+            text("DROP INDEX IF EXISTS ix_harness_invocations_logical_action_key")
+        )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "ix_harness_invocations_logical_action_key "
+            "ON harness_invocations(logical_action_key) "
+            "WHERE logical_action_key IS NOT NULL"
+        )
+    )
 
 
 def _migrate_default_model_output_limit(conn, tables: set[str]) -> None:

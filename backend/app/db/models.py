@@ -593,6 +593,143 @@ class ScheduledTaskRun(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class HarnessTaskFrameRecord(SQLModel, table=True):
+    """Durable TaskFrame state for the isolated Harness v2 execution path."""
+
+    __tablename__ = "harness_task_frames"
+    __table_args__ = (
+        UniqueConstraint("session_id", "task_id", name="uq_harness_task_frame_session_task"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("htask"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    source_turn_id: str = Field(index=True)
+    task_id: str = Field(index=True)
+    kind: str = Field(default="conversation", index=True)
+    decision: str = Field(default="answer_only", index=True)
+    status: str = Field(default="queued", index=True)
+    sequence: int = 0
+    skill_id: Optional[str] = Field(default=None, index=True)
+    step_id: Optional[str] = Field(default=None, index=True)
+    user_intent: Optional[str] = None
+    requirements_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    slots_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    depends_on_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    task_requirement_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    result_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    error_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    state_version: int = 1
+    attempt_no: int = 0
+    lease_owner: Optional[str] = Field(default=None, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class HarnessRunRecord(SQLModel, table=True):
+    __tablename__ = "harness_runs"
+
+    id: str = Field(default_factory=lambda: new_id("hrun"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    task_frame_record_id: str = Field(index=True)
+    task_id: str = Field(index=True)
+    source_turn_id: str = Field(index=True)
+    status: str = Field(default="running", index=True)
+    attempt_no: int = 1
+    lease_owner: Optional[str] = Field(default=None, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    action_count: int = 0
+    task_requirement_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    capability_snapshot_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
+    result_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class HarnessTurnRecord(SQLModel, table=True):
+    """Exactly-once receipt for one client-addressable Harness turn."""
+
+    __tablename__ = "harness_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "session_id",
+            "client_turn_id",
+            name="uq_harness_turn_client_receipt",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("hturn"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    client_turn_id: str = Field(index=True)
+    request_digest: str = Field(index=True)
+    status: str = Field(default="started", index=True)
+    lease_owner: str = Field(index=True)
+    lease_expires_at: datetime = Field(index=True)
+    user_message_id: Optional[str] = Field(default=None, index=True)
+    response_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    error_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class HarnessSessionLeaseRecord(SQLModel, table=True):
+    """Cross-process execution fence for one Harness chat session."""
+
+    __tablename__ = "harness_session_leases"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "session_id",
+            name="uq_harness_session_execution_lease",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("hslease"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    lease_owner: str = Field(index=True)
+    lease_expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class HarnessInvocationRecord(SQLModel, table=True):
+    __tablename__ = "harness_invocations"
+    __table_args__ = (
+        UniqueConstraint("run_id", "call_id", name="uq_harness_invocation_run_call"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("hinvoke"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    task_id: str = Field(index=True)
+    run_id: str = Field(index=True)
+    call_id: str = Field(index=True)
+    tool_name: str = Field(index=True)
+    request_digest: str = Field(index=True)
+    logical_action_key: Optional[str] = Field(default=None, unique=True, index=True)
+    replayed_from_invocation_id: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="started", index=True)
+    arguments_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    result_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    response_cache_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    approval_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Message(SQLModel, table=True):
     __tablename__ = "messages"
 
