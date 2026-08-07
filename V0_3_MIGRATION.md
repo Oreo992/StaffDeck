@@ -25,6 +25,7 @@ Chat API → Runtime Router
 - M1-B 已迁入统一 ToolReplayPolicy、Invocation Store 与带 lease fence 的 TaskFrame Store。
 - M1-C 已接入默认关闭的完成态影子记录；使用独立数据库 Session，失败不影响正式回复。
 - M2-A 已迁入冻结能力清单，可统一投影文件、Tool、Knowledge 与 General Skill。
+- M2-B 已迁入统一 Invoker：执行前复核授权与快照，副作用先审批并使用持久化重放 fence。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -54,8 +55,8 @@ Chat API → Runtime Router
 ### M2：统一能力层
 
 - [x] 用 Capability Manifest 投影现有 Tool、Knowledge、General Skill 和文件能力。
-- Harness Capability Invoker 继续调用现有 `ToolExecutor`、权限、确认和审计实现。
-- 未声明副作用继续按保守规则分类，转换过程禁止降级。
+- [x] Harness Capability Invoker 继续调用现有 `ToolExecutor`、权限、确认和审计实现。
+- [x] 未声明副作用继续按保守规则分类，转换过程禁止降级。
 
 ### M3：Legacy 由 Harness v2 接管
 

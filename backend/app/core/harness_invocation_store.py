@@ -40,6 +40,7 @@ class HarnessInvocationStore:
         tool_name: str,
         arguments: dict[str, Any],
         logical_action_key: str | None = None,
+        audit_arguments: dict[str, Any] | None = None,
     ) -> HarnessInvocationClaim:
         digest = request_digest(tool_name, arguments)
         existing = self._find_call(run_id, call_id)
@@ -65,7 +66,7 @@ class HarnessInvocationStore:
             request_digest=digest,
             logical_action_key=logical_action_key,
             status="started",
-            arguments_json=dict(arguments),
+            arguments_json=dict(audit_arguments if audit_arguments is not None else arguments),
         )
         self.db.add(record)
         try:
