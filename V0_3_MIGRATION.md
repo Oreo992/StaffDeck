@@ -23,6 +23,7 @@ Chat API → Runtime Router
 - `app.runtime.v2_compat` 已保证工具副作用双向映射：`read → read`、`write → write`、`destructive → delete`。
 - M1-A 已迁入五类生命周期表、Turn receipt Store 与 Session lease Store；目前没有生产调用者。
 - M1-B 已迁入统一 ToolReplayPolicy、Invocation Store 与带 lease fence 的 TaskFrame Store。
+- M1-C 已接入默认关闭的完成态影子记录；使用独立数据库 Session，失败不影响正式回复。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -46,7 +47,7 @@ Chat API → Runtime Router
 - [x] 增量加入 `HarnessTaskFrameRecord`、`HarnessRunRecord`、`HarnessTurnRecord`、`HarnessSessionLeaseRecord`、`HarnessInvocationRecord`。
 - [x] 迁入 session lease 和 turn receipt，验证并发 fence、完成响应重放与请求摘要冲突。
 - [x] 迁入 TaskFrame store 和 invocation replay policy。
-- [ ] 使用独立数据库 Session 做影子写入；不能直接复用 AgentLoop 的长事务 Session。
+- [x] 使用独立数据库 Session 做影子写入；不能直接复用 AgentLoop 的长事务 Session。
 - 先影子写入并核对，不改变现有响应路径；数据库升级必须可重复执行。
 
 ### M2：统一能力层

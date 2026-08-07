@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     html_artifact_upload_url: str = ""
     html_artifact_public_url_prefix: str = ""
     html_artifact_timeout_seconds: float = 20.0
+    harness_v2_shadow_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),

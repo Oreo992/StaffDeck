@@ -23,6 +23,7 @@ from app.artifacts.workspace_delivery import (
 )
 from app.core import AgentLoop
 from app.core.cancellation import cancel_chat_turn
+from app.core.harness_shadow_recorder import record_harness_v2_shadow_turn
 from app.runtime.claude_sdk import ClaudeAgentSdkAdapter
 from app.db import engine, get_session
 from app.db.models import (
@@ -934,6 +935,7 @@ def chat_turn(
             _schedule_session_title_summary(request.tenant_id, request.user_id, response.session_id, request.agent_id)
             return response
     response = AgentLoop(db).handle_turn(request)
+    record_harness_v2_shadow_turn(request, response)
     _schedule_session_title_summary(request.tenant_id, request.user_id, response.session_id, request.agent_id)
     if request.interaction_mode == "scheduled_task" and request.agent_id:
         draft = detect_scheduled_task_draft(
@@ -1108,6 +1110,16 @@ def chat_stream(
                         _persist_relay_only_event(worker_db, request.tenant_id, item_session_id, event_name, data)
                     elif event_name == "complete" and item_session_id:
                         _persist_relay_only_event(worker_db, request.tenant_id, item_session_id, event_name, data)
+                        try:
+                            completed_response = ChatTurnResponse.model_validate(data)
+                        except Exception as exc:
+                            logger.warning(
+                                "Skipping malformed Harness v2 shadow response for session %s: %s",
+                                item_session_id,
+                                exc,
+                            )
+                        else:
+                            record_harness_v2_shadow_turn(request, completed_response)
                         worker_terminal["seen"] = True
                     elif event_name in {"stream_cancelled", "stream_interrupted", "error", "error_occurred"}:
                         worker_terminal["seen"] = True
