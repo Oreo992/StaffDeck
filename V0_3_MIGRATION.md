@@ -28,6 +28,7 @@ Chat API → Runtime Router
 - M2-B 已迁入统一 Invoker：执行前复核授权与快照，副作用先审批并使用持久化重放 fence。
 - M3-A 已补齐 HarnessRun 的开始、续租、完成与取消 fence；尚未切换生产路由。
 - M3-B 已加入默认关闭的租户 canary 配置与纯路由判定；仅白名单员工的新 Legacy 会话可入选。
+- M3-C 已加入 TaskRequest Compiler：SOP、附件、记忆和冻结能力清单被编译成有界合同，且不会修改旧 Session 状态。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -64,6 +65,7 @@ Chat API → Runtime Router
 
 - [x] 建立与 TaskFrame lease/attempt 绑定的 HarnessRun 生命周期。
 - [x] 以租户开关启用，默认关闭；判定器排除历史会话与 Claude 会话。
+- [x] 编译不可变 TaskRequirement；保留确定性分支谓词，过滤内部字段、密钥和附件 data URL。
 - 新建 `legacy` 会话先进入 Harness v2；历史会话按兼容策略逐步放开。
 - 出错明确终止，不在同一 turn 内回退旧 AgentLoop，避免重复副作用。
 
