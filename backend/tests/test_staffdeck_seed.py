@@ -123,6 +123,28 @@ def test_staffdeck_seed_uses_existing_admin_id_for_seeded_agents() -> None:
         } == {"user_existing_admin"}
 
 
+def test_staffdeck_seed_preserves_employee_runtime_lock() -> None:
+    with _seeded_session() as db:
+        agent = db.exec(
+            select(AgentProfile).where(
+                AgentProfile.tenant_id == "tenant_demo",
+                AgentProfile.name == "IT",
+            )
+        ).one()
+        metadata = dict(agent.metadata_json or {})
+        metadata.update({"default_runtime_mode": "legacy", "runtime_mode_locked": True})
+        agent.metadata_json = metadata
+        db.add(agent)
+        db.commit()
+
+        seed_demo_data(db)
+        db.commit()
+        db.refresh(agent)
+
+        assert agent.metadata_json["default_runtime_mode"] == "legacy"
+        assert agent.metadata_json["runtime_mode_locked"] is True
+
+
 def test_staffdeck_seed_does_not_overwrite_non_seed_employee_name_conflict() -> None:
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)

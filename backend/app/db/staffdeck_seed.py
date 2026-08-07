@@ -108,6 +108,11 @@ def _seed_agents(session: Session, rows: Iterable[JsonDict], id_maps: dict[str, 
         ).first()
         existing = _seed_update_target(existing_by_id, existing_by_name, source_id)
         metadata = _agent_metadata(row.get("metadata_json"))
+        if existing:
+            existing_metadata = dict(existing.metadata_json or {})
+            for runtime_key in ("default_runtime_mode", "runtime_mode_locked"):
+                if runtime_key in existing_metadata:
+                    metadata[runtime_key] = existing_metadata[runtime_key]
         payload = {
             "tenant_id": TENANT_ID,
             "name": name,
