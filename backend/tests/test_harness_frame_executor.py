@@ -171,6 +171,7 @@ async def test_executor_delegates_one_continuous_run_and_keeps_graph_uncommitted
     assert result.next_step_id == "reply"
     assert result.action_count == 4
     assert result.capability_results[0]["tool_name"] == "catalog.lookup"
+    assert result.capability_results[0]["arguments"] == {"query": "A1"}
     assert runs[0].status == "completed"
     assert runs[0].task_requirement_json["goal"] == "完成研究"
     assert frame.status == "running"

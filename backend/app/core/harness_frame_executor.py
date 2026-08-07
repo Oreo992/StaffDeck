@@ -80,7 +80,9 @@ class HarnessFrameExecutor:
                 attempt_no=run.attempt_no,
             )
             result = invoke_capability(name, dict(arguments or {}))
-            capability_results.append(_bounded_capability_result(name, result))
+            capability_results.append(
+                _bounded_capability_result(name, arguments, result)
+            )
             return result
 
         def emit(event_type: str, payload: dict[str, Any]) -> None:
@@ -272,11 +274,16 @@ def _collect_dict_items(
 
 def _bounded_capability_result(
     tool_name: str,
+    arguments: dict[str, Any],
     result: dict[str, Any],
     *,
     max_chars: int = 12_000,
 ) -> dict[str, Any]:
-    payload = {"tool_name": tool_name, **dict(result or {})}
+    payload = {
+        "tool_name": tool_name,
+        "arguments": dict(arguments or {}),
+        **dict(result or {}),
+    }
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     if len(serialized) <= max_chars:
         return payload

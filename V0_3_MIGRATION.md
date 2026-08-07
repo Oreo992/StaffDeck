@@ -30,6 +30,7 @@ Chat API → Runtime Router
 - M3-B 已加入默认关闭的租户 canary 配置与纯路由判定；仅白名单员工的新 Legacy 会话可入选。
 - M3-C 已加入 TaskRequest Compiler：SOP、附件、记忆和冻结能力清单被编译成有界合同，且不会修改旧 Session 状态。
 - M3-D 已加入单次连续 Runtime 的 Frame Executor；Runtime 内部自主循环，外层只维护能力门禁、lease 和候选结果。
+- M4-A 已打通 Frame 执行结果到 SOP Supervisor 的证据桥；模型完成声明不会被当作工具证据。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -74,6 +75,7 @@ Chat API → Runtime Router
 ### M4：Claude 共用 v2 基础设施
 
 - Claude SDK 保持自主 loop，只替换工具执行、工作区、附件、receipt 和 lease 实现。
+- [x] 将 Runtime 候选结果和能力网关结果转换为 Supervisor 输出与 EvidenceLedger。
 - SOP Supervisor 仍是外环控制器，Graph 状态只在证据审计通过后提交。
 - 完成同一 session 的恢复、取消、审批和重复调用验证。
 
