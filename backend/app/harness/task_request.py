@@ -40,6 +40,7 @@ class TaskExecutionResult(BaseModel):
     ]
     reply_fragment: str = ""
     slot_updates: dict[str, Any] = Field(default_factory=dict)
+    completed_step_ids: list[str] = Field(default_factory=list)
     next_step_id: str | None = None
     citations: list[dict[str, Any]] = Field(default_factory=list)
     evidence_results: list[dict[str, Any]] = Field(default_factory=list)
@@ -47,6 +48,7 @@ class TaskExecutionResult(BaseModel):
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     task_summary: str = ""
     action_count: int = 0
+    runtime_session_id: str | None = None
     error: dict[str, Any] | None = None
 
 
