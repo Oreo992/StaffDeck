@@ -33,6 +33,7 @@ Chat API → Runtime Router
 - M4-A 已打通 Frame 执行结果到 SOP Supervisor 的证据桥；模型完成声明不会被当作工具证据。
 - M3-E 已将现有 Router 的场景判断转换为 Harness TurnPlan；普通问答不会因会话里已有 SOP 而被强制塞回 SOP。
 - M4-B 已将 Claude 普通对话与 SOP 执行段接入真实 TaskFrame/HarnessRun 生命周期；修复共享 SDK session 但逐轮留痕。
+- M4-C 已将 FrameExecutor 能力调用接入 Invocation Store；同一 TaskFrame 的重复写入跨修复 Run 只执行一次。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -80,6 +81,7 @@ Chat API → Runtime Router
 - Claude SDK 保持自主 loop，只替换工具执行、工作区、附件、receipt 和 lease 实现。
 - [x] 将 Runtime 候选结果和能力网关结果转换为 Supervisor 输出与 EvidenceLedger。
 - [x] Claude 普通对话和 SOP Segment 均持久化冻结能力快照与 Run 结果；Run 结束后能力回调立即失效。
+- [x] 所有 Runtime 能力调用先持久化 claim；写入按逻辑动作键跨 Run 重放，未知结果禁止自动重试。
 - SOP Supervisor 仍是外环控制器，Graph 状态只在证据审计通过后提交。
 - 完成同一 session 的恢复、取消、审批和重复调用验证。
 

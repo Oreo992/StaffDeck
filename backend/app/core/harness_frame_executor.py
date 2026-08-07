@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import re
 from typing import Any
 
 from sqlmodel import Session
 
+from app.core.harness_invocation_store import (
+    HarnessInvocationConflict,
+    HarnessInvocationStore,
+    logical_action_key,
+)
 from app.core.harness_run_store import HarnessRunStore
-from app.db.models import HarnessTaskFrameRecord
+from app.db.models import HarnessTaskFrameRecord, new_id
 from app.harness.task_request import TaskExecutionResult, TaskRequirement
 from app.runtime.contracts import (
     HarnessRunRequest,
@@ -46,6 +52,7 @@ class HarnessFrameExecutor:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.runs = HarnessRunStore(db)
+        self.invocations = HarnessInvocationStore(db)
 
     async def execute(
         self,
@@ -75,6 +82,11 @@ class HarnessFrameExecutor:
         )
         capability_results: list[dict[str, Any]] = []
         run_open = {"value": True}
+        descriptors = {
+            item.name: item
+            for item in requirement.capability_manifest.available
+            if item.available
+        }
 
         def invoke(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             if not run_open["value"]:
@@ -90,7 +102,90 @@ class HarnessFrameExecutor:
                 lease_owner=lease_owner,
                 attempt_no=run.attempt_no,
             )
-            result = invoke_capability(name, dict(arguments or {}))
+            descriptor = descriptors.get(name)
+            if descriptor is None:
+                result = {
+                    "success": False,
+                    "error": {
+                        "code": "CAPABILITY_NOT_AVAILABLE",
+                        "message": "该能力不在当前 TaskFrame 的冻结清单中。",
+                    },
+                }
+                capability_results.append(
+                    _bounded_capability_result(name, arguments, result)
+                )
+                return result
+            action_key = None
+            effect_level = descriptor.effect_level
+            if descriptor.kind == "general_skill" and str(
+                arguments.get("operation") or ""
+            ).strip().lower() == "read":
+                effect_level = "read"
+            if effect_level != "read":
+                action_key = logical_action_key(
+                    tenant_id=frame.tenant_id,
+                    task_frame_id=requirement.task_frame_id,
+                    step_id=frame.step_id,
+                    tool_id=descriptor.capability_id,
+                    tool_name=name,
+                    arguments=arguments,
+                )
+            try:
+                claim = self.invocations.claim(
+                    tenant_id=frame.tenant_id,
+                    session_id=frame.session_id,
+                    task_id=requirement.task_frame_id,
+                    run_id=run.id,
+                    call_id=new_id("hcall"),
+                    tool_name=name,
+                    arguments=arguments,
+                    logical_action_key=action_key,
+                    audit_arguments=_audit_arguments(arguments),
+                )
+            except HarnessInvocationConflict as exc:
+                result = {
+                    "success": False,
+                    "error": {
+                        "code": "INVOCATION_RECONCILIATION_REQUIRED",
+                        "message": str(exc),
+                    },
+                }
+                capability_results.append(
+                    _bounded_capability_result(name, arguments, result)
+                )
+                return result
+            if claim.replay is not None:
+                capability_results.append(
+                    _bounded_capability_result(name, arguments, claim.replay)
+                )
+                return claim.replay
+            if claim.record is None:
+                result = {
+                    "success": False,
+                    "error": {
+                        "code": "INVOCATION_CLAIM_FAILED",
+                        "message": "无法建立能力调用凭据。",
+                    },
+                }
+                capability_results.append(
+                    _bounded_capability_result(name, arguments, result)
+                )
+                return result
+            try:
+                result = invoke_capability(name, dict(arguments or {}))
+            except Exception as exc:
+                result = {
+                    "success": False,
+                    "error": {
+                        "code": "CAPABILITY_EXECUTION_ERROR",
+                        "message": str(exc),
+                    },
+                }
+            self.invocations.finish(
+                claim.record,
+                result,
+                definitely_not_sent=_failure_was_not_sent(result),
+            )
             capability_results.append(
                 _bounded_capability_result(name, arguments, result)
             )
@@ -318,6 +413,29 @@ def _bounded_capability_result(
         "truncated": True,
         "preview": serialized[:max_chars],
         "error": result.get("error"),
+    }
+
+
+def _audit_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    sensitive = re.compile(
+        r"(?:content|secret|token|password|api[_-]?key|authorization|credential)",
+        re.IGNORECASE,
+    )
+    return {
+        str(key): "<redacted>" if sensitive.search(str(key)) else value
+        for key, value in arguments.items()
+    }
+
+
+def _failure_was_not_sent(result: dict[str, Any]) -> bool:
+    error = result.get("error")
+    code = str(error.get("code") or "") if isinstance(error, dict) else ""
+    return code in {
+        "APPROVAL_REQUIRED",
+        "ARTIFACT_REJECTED",
+        "CAPABILITY_NOT_AVAILABLE",
+        "NOT_ALLOWED",
+        "SOP_ACTIVATION_REQUIRED",
     }
 
 

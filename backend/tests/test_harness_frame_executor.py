@@ -90,6 +90,7 @@ class _FakeRuntime:
         self.result = result
         self.tool_calls = list(tool_calls or [])
         self.requests: list[HarnessRunRequest] = []
+        self.tool_results: list[dict[str, Any]] = []
 
     async def run_segment(self, request: HarnessRunRequest) -> HarnessRunResult:
         self.requests.append(request)
@@ -97,7 +98,8 @@ class _FakeRuntime:
         for name, arguments in self.tool_calls:
             invoked = request.execute_tool(name, arguments)
             if isinstance(invoked, Awaitable):
-                await invoked
+                invoked = await invoked
+            self.tool_results.append(invoked)
         return self.result
 
     async def resume(
@@ -251,3 +253,85 @@ async def test_executor_fails_closed_when_runtime_errors() -> None:
     assert result.status == "failed"
     assert result.error == {"code": "runtime_down", "message": "SDK unavailable"}
     assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_executor_replays_duplicate_write_without_repeating_side_effect() -> None:
+    engine = _memory_engine()
+    side_effects: list[dict[str, Any]] = []
+
+    def invoke(_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        side_effects.append(arguments)
+        return {"success": True, "data": {"artifact_id": "artifact-1"}}
+
+    runtime = _FakeRuntime(
+        HarnessRunResult(
+            output=HarnessStructuredOutput(reply="文件已发送"),
+            num_turns=2,
+        ),
+        tool_calls=[
+            ("send_file", {"path": "report.html"}),
+            ("send_file", {"path": "report.html"}),
+        ],
+    )
+    with Session(engine) as db:
+        frame = _claimed_frame(db)
+        await HarnessFrameExecutor(db).execute(
+            frame,
+            lease_owner="worker-1",
+            requirement=_requirement(),
+            runtime=runtime,
+            model="claude-test",
+            api_key="secret",
+            invoke_capability=invoke,
+        )
+
+    assert side_effects == [{"path": "report.html"}]
+    assert runtime.tool_results[0]["data"] == {"artifact_id": "artifact-1"}
+    assert runtime.tool_results[1]["idempotent_replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_executor_replays_write_across_repair_runs_for_same_task_frame() -> None:
+    engine = _memory_engine()
+    side_effect_count = 0
+
+    def invoke(_name: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+        nonlocal side_effect_count
+        side_effect_count += 1
+        return {"success": True, "data": {"artifact_id": "artifact-1"}}
+
+    first_runtime = _FakeRuntime(
+        HarnessRunResult(output=HarnessStructuredOutput(reply="候选"), num_turns=1),
+        tool_calls=[("send_file", {"path": "report.html"})],
+    )
+    repair_runtime = _FakeRuntime(
+        HarnessRunResult(output=HarnessStructuredOutput(reply="修复完成"), num_turns=1),
+        tool_calls=[("send_file", {"path": "report.html"})],
+    )
+    with Session(engine) as db:
+        frame = _claimed_frame(db)
+        executor = HarnessFrameExecutor(db)
+        await executor.execute(
+            frame,
+            lease_owner="worker-1",
+            requirement=_requirement(),
+            runtime=first_runtime,
+            model="claude-test",
+            api_key="secret",
+            invoke_capability=invoke,
+        )
+        await executor.execute(
+            frame,
+            lease_owner="worker-1",
+            requirement=_requirement(),
+            runtime=repair_runtime,
+            model="claude-test",
+            api_key="secret",
+            invoke_capability=invoke,
+        )
+        runs = db.exec(select(HarnessRunRecord)).all()
+
+    assert side_effect_count == 1
+    assert repair_runtime.tool_results[0]["idempotent_replay"] is True
+    assert len(runs) == 2
