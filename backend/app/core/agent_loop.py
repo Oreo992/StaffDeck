@@ -45,6 +45,11 @@ from app.core.response_generator import (
 from app.core.router import Router
 from app.core.skill_runtime import SkillRuntime
 from app.core.step_agent import StepAgent
+from app.core.tool_replay_policy import (
+    TOOL_CALL_HISTORY_SLOT,
+    TOOL_RESULTS_SLOT,
+    ToolReplayPolicy,
+)
 from app.db.models import (
     AgentEvent,
     AgentProfile,
@@ -107,12 +112,9 @@ STREAM_CHUNK_INTERVAL_SECONDS = 0.045
 DEFAULT_REFLECTION_MAX_ROUNDS = 1
 REFLECTION_MAX_ROUNDS_LIMIT = 5
 MAX_TOOL_ACTIONS_PER_TURN = 6
-TOOL_CALL_HISTORY_SLOT = "_tool_call_history"
-TOOL_RESULTS_SLOT = "_tool_results"
 GRAPH_PENDING_STEPS_SLOT = "_graph_pending_steps"
 GENERAL_SKILL_TOOL_PREFIX = "general_skill."
 CANCELLED_ASSISTANT_REPLY = "已停止生成"
-IDEMPOTENT_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ERROR_TRACEBACK_CHAR_LIMIT = 6000
 FILE_DELIVERY_REQUEST = re.compile(
     r"(?i)(?:生成|转成|转换|导出|下载|发我|给我|作为).{0,16}"
@@ -6735,109 +6737,38 @@ class AgentLoop:
         tool_call: ToolCall,
         tool_result: ToolResult,
     ) -> None:
-        slots = dict(chat_session.slots_json or {})
-        history = self._tool_call_history(slots)
-        signature = self._tool_call_signature(tool_call)
-        if signature not in {self._tool_history_signature(item) for item in history}:
-            history.append({"tool_name": tool_call.name, "arguments": tool_call.arguments})
-
-        results = slots.get(TOOL_RESULTS_SLOT)
-        result_items = list(results) if isinstance(results, list) else []
-        result_items.append(
-            {
-                "tool_name": tool_call.name,
-                "arguments": tool_call.arguments,
-                "success": tool_result.success,
-                "data": tool_result.data,
-                "error": tool_result.error.model_dump() if tool_result.error else None,
-            }
+        chat_session.slots_json = ToolReplayPolicy.record_result(
+            dict(chat_session.slots_json or {}),
+            tool_call,
+            tool_result,
+            history_reader=self._tool_call_history,
+            call_signature=self._tool_call_signature,
+            history_signature=self._tool_history_signature,
         )
-        slots[TOOL_CALL_HISTORY_SLOT] = history
-        slots[TOOL_RESULTS_SLOT] = result_items
-        chat_session.slots_json = slots
 
     def _tool_call_history(self, slots: dict[str, Any]) -> list[dict[str, Any]]:
-        history = slots.get(TOOL_CALL_HISTORY_SLOT)
-        if not isinstance(history, list):
-            return []
-        return [item for item in history if isinstance(item, dict)]
+        return ToolReplayPolicy.history(slots)
 
     def _tool_history_signature(self, item: dict[str, Any]) -> str:
-        return self._tool_signature(
-            str(item.get("tool_name") or ""),
-            item.get("arguments") if isinstance(item.get("arguments"), dict) else {},
-        )
+        return ToolReplayPolicy.history_item_signature(item)
 
     def _tool_call_signature(self, tool_call: ToolCall) -> str:
         return self._tool_signature(tool_call.name, tool_call.arguments)
 
     def _tool_signature(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        return json.dumps(
-            {"tool_name": tool_name, "arguments": arguments},
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        )
+        return ToolReplayPolicy.signature(tool_name, arguments)
 
     def _tool_idempotency_config(self, tool: Tool) -> tuple[bool | None, list[str] | None]:
         raw_config = tool.config_json if isinstance(tool.config_json, dict) else {}
         raw_schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
-        config = raw_config.get("idempotency", raw_config.get("idempotency_policy"))
-        if config is None:
-            config = raw_schema.get("x-idempotency", raw_schema.get("x_idempotency"))
-        enabled: bool | None = None
-        key_fields: list[str] | None = None
-        if isinstance(config, dict):
-            enabled = self._idempotency_enabled_value(
-                config.get("enabled", config.get("mode", config.get("scope")))
-            )
-            fields = (
-                config.get("key_fields") or config.get("fields") or config.get("argument_fields")
-            )
-            if isinstance(fields, list):
-                key_fields = [str(item).strip() for item in fields if str(item).strip()]
-        else:
-            enabled = self._idempotency_enabled_value(config)
-
-        requires_confirmation = raw_config.get(
-            "requires_confirmation", raw_schema.get("requires_confirmation")
+        return ToolReplayPolicy.configuration(
+            raw_config,
+            raw_schema,
+            enabled_parser=self._idempotency_enabled_value,
         )
-        confirmation_enabled = self._idempotency_enabled_value(requires_confirmation)
-        if enabled is None and confirmation_enabled is True:
-            enabled = True
-        return enabled, key_fields
 
     def _idempotency_enabled_value(self, value: object) -> bool | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
-        normalized = str(value).strip().lower()
-        if normalized in {
-            "1",
-            "true",
-            "yes",
-            "on",
-            "enabled",
-            "enable",
-            "replay",
-            "session",
-            "session_arguments",
-        }:
-            return True
-        if normalized in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "disabled",
-            "disable",
-            "none",
-            "read_only",
-            "readonly",
-        }:
-            return False
-        return None
+        return ToolReplayPolicy.enabled_value(value)
 
     def _tool_requires_idempotent_replay(
         self, tenant_id: str, tool_call: ToolCall
@@ -6858,17 +6789,14 @@ class AgentLoop:
         configured, key_fields = self._tool_idempotency_config(tool)
         if configured is not None:
             return configured, key_fields
-        method = str(tool.method or "").upper()
-        if method not in IDEMPOTENT_WRITE_METHODS:
+        if not ToolReplayPolicy.default_replay_enabled(str(tool.method or "")):
             return False, None
         return True, key_fields
 
     def _idempotency_arguments(
         self, arguments: dict[str, Any], key_fields: list[str] | None
     ) -> dict[str, Any]:
-        if not key_fields:
-            return arguments
-        return {field: arguments.get(field) for field in key_fields if field in arguments}
+        return ToolReplayPolicy.arguments(arguments, key_fields)
 
     def _previous_successful_side_effect_tool_result(
         self,
