@@ -31,6 +31,7 @@ Chat API → Runtime Router
 - M3-C 已加入 TaskRequest Compiler：SOP、附件、记忆和冻结能力清单被编译成有界合同，且不会修改旧 Session 状态。
 - M3-D 已加入单次连续 Runtime 的 Frame Executor；Runtime 内部自主循环，外层只维护能力门禁、lease 和候选结果。
 - M4-A 已打通 Frame 执行结果到 SOP Supervisor 的证据桥；模型完成声明不会被当作工具证据。
+- M3-E 已将现有 Router 的场景判断转换为 Harness TurnPlan；普通问答不会因会话里已有 SOP 而被强制塞回 SOP。
 - Harness v2 尚未进入生产路由。
 
 ## 不可破坏的行为契约
@@ -69,6 +70,7 @@ Chat API → Runtime Router
 - [x] 以租户开关启用，默认关闭；判定器排除历史会话与 Claude 会话。
 - [x] 编译不可变 TaskRequirement；保留确定性分支谓词，过滤内部字段、密钥和附件 data URL。
 - [x] 单次调用选定 Runtime 执行完整 TaskRequirement；不移植逐动作重复调用模型的上游 AgentLoop。
+- [x] 将 RouterDecision 纯转换为 TurnPlan；`answer_only` 始终生成普通对话 Frame，只有明确选中 SOP 才生成 SOP Frame。
 - 新建 `legacy` 会话先进入 Harness v2；历史会话按兼容策略逐步放开。
 - 出错明确终止，不在同一 turn 内回退旧 AgentLoop，避免重复副作用。
 
