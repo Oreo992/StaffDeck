@@ -491,6 +491,7 @@ export type ChatSession = {
   last_agent_question?: string;
   is_scheduled?: boolean;
   runtime_mode?: 'legacy' | 'claude_supervised';
+  execution_engine?: 'legacy' | 'harness_v2' | 'claude_supervised';
   updated_at: string;
 };
 

@@ -27,6 +27,7 @@ _configured_path: Path | None = None
 _queue_handler: _DroppingQueueHandler | None = None
 _file_handler: _RuntimeFileHandler | None = None
 _listener: _RuntimeQueueListener | None = None
+_logger_states: dict[str, tuple[int, bool]] = {}
 _atexit_registered = False
 
 
@@ -75,7 +76,8 @@ def runtime_log_path() -> Path:
 
 def configure_runtime_logging() -> Path:
     """Configure privacy-scoped desktop logs and return the active log path."""
-    global _atexit_registered, _configured_path, _file_handler, _listener, _queue_handler
+    global _atexit_registered, _configured_path, _file_handler, _listener, _logger_states
+    global _queue_handler
 
     log_path = runtime_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,8 +106,10 @@ def configure_runtime_logging() -> Path:
             file_handler,
             respect_handler_level=True,
         )
+        _logger_states = {}
         for logger_name in RUNTIME_LOGGER_NAMES:
             runtime_logger = logging.getLogger(logger_name)
+            _logger_states[logger_name] = (runtime_logger.level, runtime_logger.propagate)
             for existing in list(runtime_logger.handlers):
                 if isinstance(existing, _DroppingQueueHandler):
                     runtime_logger.removeHandler(existing)
@@ -141,14 +145,16 @@ def configure_runtime_logging() -> Path:
 
 def shutdown_runtime_logging() -> None:
     """Flush queued records and close StaffDeck-owned logging resources."""
-    global _configured_path, _file_handler, _listener, _queue_handler
+    global _configured_path, _file_handler, _listener, _logger_states, _queue_handler
 
     listener = _listener
     queue_handler = _queue_handler
     file_handler = _file_handler
+    logger_states = _logger_states
     _listener = None
     _queue_handler = None
     _file_handler = None
+    _logger_states = {}
     _configured_path = None
 
     if listener is not None:
@@ -158,6 +164,10 @@ def shutdown_runtime_logging() -> None:
             runtime_logger = logging.getLogger(logger_name)
             runtime_logger.removeHandler(queue_handler)
         queue_handler.close()
+    for logger_name, (level, propagate) in logger_states.items():
+        runtime_logger = logging.getLogger(logger_name)
+        runtime_logger.setLevel(level)
+        runtime_logger.propagate = propagate
     if file_handler is not None:
         file_handler.close()
 

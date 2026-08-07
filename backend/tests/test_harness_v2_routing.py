@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel
 
+from app.api.chat import session_read
 from app.api.ui_config import UIConfigUpdateRequest, update_enterprise_ui_config
 from app.core.harness_v2_routing import select_harness_v2_canary
 from app.db import database
@@ -95,6 +96,13 @@ def test_canary_selection_is_sticky_for_existing_harness_session() -> None:
 
     assert selected.selected is True
     assert selected.reason == "session_locked_to_harness_v2"
+
+
+def test_session_read_exposes_the_locked_execution_engine() -> None:
+    session = _session()
+    session.runtime_state_json = {"execution_engine": "harness_v2"}
+
+    assert session_read(session).execution_engine == "harness_v2"
 
 
 def test_admin_cannot_enable_canary_without_agent_allowlist() -> None:

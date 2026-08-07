@@ -163,6 +163,12 @@ class HumanHandoffReplyRequest(BaseModel):
 
 
 def session_read(row: ChatSession, *, is_scheduled: bool = False) -> ChatSessionRead:
+    runtime_state = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+    execution_engine = str(runtime_state.get("execution_engine") or "").strip()
+    if not execution_engine:
+        execution_engine = (
+            "claude_supervised" if row.runtime_mode == "claude_supervised" else "legacy"
+        )
     return ChatSessionRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -176,6 +182,7 @@ def session_read(row: ChatSession, *, is_scheduled: bool = False) -> ChatSession
         last_agent_question=row.last_agent_question,
         is_scheduled=is_scheduled,
         runtime_mode=row.runtime_mode or "legacy",
+        execution_engine=execution_engine,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )

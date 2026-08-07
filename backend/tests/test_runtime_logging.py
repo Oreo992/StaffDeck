@@ -67,6 +67,30 @@ def test_runtime_logging_does_not_attach_to_root_logger(monkeypatch, tmp_path: P
         runtime_logging.shutdown_runtime_logging()
 
 
+def test_runtime_logging_restores_logger_state_on_shutdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(runtime_logging, "_configured_path", None)
+    logger = logging.getLogger("staffdeck.static")
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.setLevel(logging.ERROR)
+    logger.propagate = True
+
+    try:
+        runtime_logging.configure_runtime_logging()
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+
+        runtime_logging.shutdown_runtime_logging()
+
+        assert logger.level == logging.ERROR
+        assert logger.propagate is True
+    finally:
+        runtime_logging.shutdown_runtime_logging()
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_uncaught_exception_log_excludes_exception_message(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(runtime_logging, "_configured_path", None)

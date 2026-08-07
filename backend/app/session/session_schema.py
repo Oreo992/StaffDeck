@@ -205,6 +205,7 @@ class ChatSessionRead(BaseModel):
     last_agent_question: Optional[str]
     is_scheduled: bool = False
     runtime_mode: RuntimeModeValue = "legacy"
+    execution_engine: str = "legacy"
     created_at: str
     updated_at: str
 

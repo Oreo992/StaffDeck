@@ -1822,6 +1822,7 @@
   "Runtime 已按会话锁定；新建任务后可切换": "The runtime is locked for this session; create a new task to switch",
   "Claude 监督": "Claude Supervised",
   "现有 StepAgent 执行链": "Existing StepAgent execution pipeline",
+  "自主循环 + 证据审计": "Autonomous loop + evidence audit",
   "Claude 自主循环 + StaffDeck SOP 审计": "Claude autonomous loop with StaffDeck SOP auditing",
   "Claude Runtime 尚未由管理员配置或没有开放 SOP": "Claude Runtime is not configured or has no enabled SOPs",
   "执行轮数设置必须是数字": "Execution round settings must be numbers",

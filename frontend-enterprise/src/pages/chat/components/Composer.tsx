@@ -73,6 +73,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     selectedModelConfig,
     changeModelConfig,
     effectiveRuntimeMode,
+    effectiveExecutionEngine,
     runtimeModeLocked,
     canUseClaudeRuntime,
     changeRuntimeMode,
@@ -367,7 +368,13 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
                       disabled={runtimeModeLocked}
                       title={runtimeModeLocked ? 'Runtime 已按会话锁定；新建任务后可切换' : '选择执行 Runtime'}
                     >
-                      <span>{effectiveRuntimeMode === 'claude_supervised' ? 'Claude 监督' : 'Legacy'}</span>
+                      <span>
+                        {effectiveExecutionEngine === 'claude_supervised'
+                          ? 'Claude 监督'
+                          : effectiveExecutionEngine === 'harness_v2'
+                            ? 'Harness v2'
+                            : 'Legacy'}
+                      </span>
                       {!runtimeModeLocked && (
                         <StaffdeckIcon name="arrow" size={14} style={{ transform: 'rotate(90deg)' }} />
                       )}
@@ -379,8 +386,14 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
                       onSelect={() => changeRuntimeMode('legacy')}
                     >
                       <span className={CHAT_MODEL_MENU_COPY_CLASS}>
-                        <span className={CHAT_MODEL_MENU_NAME_CLASS}>Legacy Runtime</span>
-                        <span className={CHAT_MODEL_MENU_DETAIL_CLASS}>现有 StepAgent 执行链</span>
+                        <span className={CHAT_MODEL_MENU_NAME_CLASS}>
+                          {effectiveExecutionEngine === 'harness_v2' ? 'Harness v2 Runtime' : 'Legacy Runtime'}
+                        </span>
+                        <span className={CHAT_MODEL_MENU_DETAIL_CLASS}>
+                          {effectiveExecutionEngine === 'harness_v2'
+                            ? '自主循环 + 证据审计'
+                            : '现有 StepAgent 执行链'}
+                        </span>
                       </span>
                       {effectiveRuntimeMode === 'legacy' && <StaffdeckIcon name="check" size={15} />}
                     </DropdownMenuItem>

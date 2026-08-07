@@ -540,6 +540,16 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   );
   const effectiveRuntimeMode = currentSession?.runtime_mode
     || (draftRuntimeModeLocked ? draftDefaultRuntimeMode : selectedRuntimeMode);
+  const effectiveExecutionEngine = currentSession?.execution_engine
+    || (effectiveRuntimeMode === 'claude_supervised'
+      ? 'claude_supervised'
+      : (
+        uiConfig.harness_v2_enabled
+        && Boolean(displayedAgent?.id)
+        && uiConfig.harness_v2_agent_allowlist.includes(displayedAgent?.id || '')
+          ? 'harness_v2'
+          : 'legacy'
+      ));
   const runtimeModeLocked = !isDraftConversation || draftRuntimeModeLocked;
   const changeRuntimeMode = useCallback((mode: 'legacy' | 'claude_supervised') => {
     if (runtimeModeLocked) return;
@@ -3344,6 +3354,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     selectedModelConfig,
     changeModelConfig,
     effectiveRuntimeMode,
+    effectiveExecutionEngine,
     runtimeModeLocked,
     canUseClaudeRuntime,
     changeRuntimeMode,
