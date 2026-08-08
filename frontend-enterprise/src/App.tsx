@@ -37,6 +37,8 @@ import AgentsPage from "./pages/AgentsPage";
 import ChatPage from "./pages/chat/ChatPage";
 import ChatGalleryPage from "./pages/chat/ChatGalleryPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
+import OperationsDashboardPage from "./pages/operations/OperationsDashboardPage";
+import CapabilityEvolutionPage from "./pages/evolution/CapabilityEvolutionPage";
 import EmptyEmployeeState from "./components/EmptyEmployeeState";
 import DistillPage from "./pages/DistillPage";
 import GeneralSkillsPage, {
@@ -334,6 +336,8 @@ function Shell({
   const sidebarAgent = selectedAgent;
   // Routes that operate on a specific employee; show the empty guide when none exist.
   const EMPLOYEE_SCOPED_PREFIXES = [
+    "/enterprise/operations",
+    "/enterprise/today",
     "/enterprise/dashboard",
     "/enterprise/scheduled-tasks",
     "/enterprise/memories",
@@ -461,7 +465,11 @@ function Shell({
         selectedAgentId={selectedAgentId}
         onSelectAgent={(agentId) => {
           if (agentId !== selectedAgentId) changeAgentScope(agentId);
-          navigate(EnterpriseRoute.Dashboard);
+          navigate(
+            selected === EnterpriseRoute.Operations || selected === EnterpriseRoute.Today || selected === EnterpriseRoute.Evolution
+              ? selected
+              : EnterpriseRoute.Dashboard,
+          );
         }}
         onOpenChat={() => {
           navigate(EnterpriseRoute.Gallery);
@@ -545,6 +553,38 @@ function Shell({
                   <DashboardPage
                     currentUser={auth.user}
                     isAdmin={isAdmin}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/operations"
+                element={
+                  <OperationsDashboardPage
+                    view="overview"
+                    agent={selectedAgent}
+                    currentUser={auth.user}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/today"
+                element={
+                  <OperationsDashboardPage
+                    view="today"
+                    agent={selectedAgent}
+                    currentUser={auth.user}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/evolution"
+                element={
+                  <CapabilityEvolutionPage
+                    agent={selectedAgent}
+                    currentUser={auth.user}
                     onLogout={onLogout}
                   />
                 }

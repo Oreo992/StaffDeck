@@ -7,6 +7,7 @@ from sqlmodel import Session
 from app.api import (
     agents,
     auth,
+    capability_evolution,
     chat,
     feedback,
     general_skills,
@@ -73,6 +74,7 @@ app.include_router(ui_config.chat_router)
 app.include_router(auth.router)
 app.include_router(agents.scope_router)
 app.include_router(agents.enterprise_router)
+app.include_router(capability_evolution.router)
 app.include_router(general_skills.router)
 app.include_router(knowledge_bases.router)
 app.include_router(knowledge.router)

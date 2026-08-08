@@ -62,6 +62,9 @@ const PRIMARY_NAV: NavItem[] = [
 ];
 
 const PROFILE_NAV: NavItem[] = [
+  { route: EnterpriseRoute.Operations, label: '经营总览', Icon: IconViewMasonry },
+  { route: EnterpriseRoute.Today, label: '今日工作', Icon: IconAlarm },
+  { route: EnterpriseRoute.Evolution, label: '能力进化', Icon: IconMagicWand },
   { route: EnterpriseRoute.Dashboard, label: '员工档案', Icon: IconFile },
   { route: EnterpriseRoute.ScheduledTasks, label: '定时任务', Icon: IconAlarm },
   { route: EnterpriseRoute.Memories, label: '记忆', Icon: IconHistory },

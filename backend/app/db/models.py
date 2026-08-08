@@ -774,6 +774,32 @@ class MessageFeedback(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class CapabilityEvolutionProposal(SQLModel, table=True):
+    __tablename__ = "capability_evolution_proposals"
+
+    id: str = Field(default_factory=lambda: new_id("evolve"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    target_kind: str = Field(default="general_skill", index=True)
+    target_resource_id: str = Field(index=True)
+    target_label: str
+    title: str
+    summary: str = ""
+    instruction: str
+    evidence_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    source_refs_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    before_content: str
+    after_content: str
+    fingerprint: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    reviewed_by_user_id: Optional[str] = Field(default=None, index=True)
+    applied_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class SkillFeedback(SQLModel, table=True):
     __tablename__ = "skill_feedback"
     __table_args__ = (UniqueConstraint("tenant_id", "message_id", "user_id", name="uq_skill_feedback_message_user"),)

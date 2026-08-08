@@ -30,3 +30,49 @@ Automated checks:
 - `node /private/tmp/codex-playwright/sd1-qa.mjs` -> 23 total, 0 failures
 
 Final result: passed
+
+---
+
+# Design QA — Operations Dashboards
+
+## Evidence
+
+- Reference overview: `C:/Users/Administrator/.codex/visualizations/2026/08/07/staffdeck-ui-audit/06-business-detail.png`
+- Implementation overview: `C:/Users/Administrator/.codex/visualizations/2026/08/07/staffdeck-ui-audit/08-operations-implementation.png`
+- Reference today view: `C:/Users/Administrator/.codex/visualizations/2026/08/07/staffdeck-ui-audit/07-daily-detail.png`
+- Implementation today view: `C:/Users/Administrator/.codex/visualizations/2026/08/07/staffdeck-ui-audit/09-today-implementation.png`
+- Responsive checks: `10-today-1024.png` and `11-operations-1024.png`
+
+## Test State
+
+- Browser: Codex in-app browser
+- Viewports: 1280 × 720 and 1024 × 768 CSS pixels
+- Account: authenticated local administrator
+- Data: live local API data for the selected employee
+- Known shell state: the existing missing-model configuration notice is visible
+
+## Comparison
+
+The implementation preserves the selected design's information hierarchy: a compact title area, four operating metrics, an attention queue, a completion trend, and a reusable capability-capture summary. The daily view keeps the three-part structure of active work, confirmations, and weekly capture. Both screens use StaffDeck's existing sidebar, header controls, typography, borders, neutral surfaces, and restrained status colors.
+
+Visible differences are intentional. The reference contains illustrative QQQ data, while the implementation renders actual tenant data and truthful empty states. The global model-configuration notice belongs to the existing application shell and was not hidden for these routes.
+
+## Findings
+
+- P0 blockers: none
+- P1 functional or layout defects: none
+- P2 visual mismatches: none
+- Navigation, period selection, employee switching, empty states, and responsive layout verified
+- Browser console errors: 0
+
+final result: passed
+
+---
+
+# Design QA — Capability Evolution
+
+- Added an evidence-driven `learning → proposal → review → apply → reuse` loop for agent-bound General Skills.
+- Negative feedback produces a proposal only when the same session contains a real `claude_skill_loaded` event for an active bound Skill.
+- Generating a proposal never edits the Skill. Applying requires employee-owner/admin permission and an exact base-content match, preventing stale proposals from overwriting newer edits.
+- The operations dashboard counts only approved, applied learning as “沉淀”; assigning a resource is no longer presented as learning.
+- Browser E2E verified proposal generation, Diff preview, approval, Skill write, later reuse counting, exact test-fixture cleanup, truthful empty states, and zero console warnings/errors.

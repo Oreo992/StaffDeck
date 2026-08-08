@@ -667,6 +667,73 @@ export type AgentWorkRecordRead = {
   events: AgentWorkRecordEventRead[];
 };
 
+export type AgentOperationsItemRead = {
+  id: string;
+  kind: 'session' | 'scheduled_run' | 'scheduled_task' | 'handoff' | 'evolution_proposal';
+  title: string;
+  description: string;
+  status: string;
+  timestamp: string;
+  session_id?: string;
+};
+
+export type AgentCapabilityChangeRead = {
+  id: string;
+  kind: 'sop' | 'tool' | 'knowledge' | 'skill';
+  label: string;
+  timestamp: string;
+  phase: 'applied';
+  instruction: string;
+  reuse_count: number;
+};
+
+export type CapabilityEvolutionProposalRead = {
+  id: string;
+  tenant_id: string;
+  agent_id: string;
+  target_kind: 'general_skill';
+  target_resource_id: string;
+  target_label: string;
+  title: string;
+  summary: string;
+  instruction: string;
+  evidence: Array<{
+    feedback_id?: string;
+    session_id?: string;
+    bucket?: string;
+    summary?: string;
+    reason?: string;
+    evidence?: string[];
+  }>;
+  source_refs: string[];
+  before_content: string;
+  after_content: string;
+  status: 'pending' | 'applied' | 'rejected';
+  reuse_count: number;
+  last_reused_at?: string | null;
+  applied_at?: string | null;
+  rejected_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentOperationsSummaryRead = {
+  agent_id: string;
+  timezone: string;
+  period_days: number;
+  generated_at: string;
+  metrics: {
+    running: number;
+    awaiting_confirmation: number;
+    completed: number;
+    capability_changes: number;
+  };
+  attention_items: AgentOperationsItemRead[];
+  today_items: AgentOperationsItemRead[];
+  completion_trend: Array<{ date: string; value: number }>;
+  capability_changes: AgentCapabilityChangeRead[];
+};
+
 export type TraceLineRead = {
   id: string;
   kind: 'thinking' | 'decision' | 'skill' | 'tool' | 'code' | 'knowledge';

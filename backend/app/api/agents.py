@@ -60,6 +60,8 @@ from app.db.models import (
     utc_now,
     User,
 )
+from app.operations import build_agent_operations_summary
+from app.operations.schema import AgentOperationsSummaryRead
 from app.security.auth import get_current_user
 from app.security.permissions import agent_owned_by_user as _agent_owned_by_user
 from app.security.permissions import is_admin_user as _is_admin_user
@@ -232,6 +234,37 @@ def get_agent_work_record(
             by_day=dict(sorted(by_day.items())),
         ),
         events=events,
+    )
+
+
+@enterprise_router.get(
+    "/{agent_id}/operations-summary",
+    response_model=AgentOperationsSummaryRead,
+)
+def get_agent_operations_summary(
+    agent_id: str,
+    tenant_id: str = Query(...),
+    period_days: int = Query(7, ge=1, le=90),
+    timezone: str = Query("Asia/Shanghai"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> AgentOperationsSummaryRead:
+    agent = _get_agent(db, tenant_id, agent_id)
+    _ensure_can_access_agent(agent, current_user)
+    try:
+        local_timezone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid timezone") from exc
+
+    return build_agent_operations_summary(
+        db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        current_user=current_user,
+        timezone=local_timezone,
+        timezone_name=timezone,
+        period_days=period_days,
+        now=utc_now(),
     )
 
 
