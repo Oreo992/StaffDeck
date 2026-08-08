@@ -23,7 +23,9 @@ OPERATION_MAX_OUTPUT_TOKENS: dict[str, int] = {
     "memory.capture": 1024,
     "session.title": 512,
     "scheduled_task.detect": 1024,
-    "feedback.analyze": 1024,
+    # Reasoning models can consume the first 1K tokens before emitting JSON.
+    # Keep this control-plane call bounded, but leave enough room for content.
+    "feedback.analyze": 4096,
 }
 
 def operation_output_tokens(operation: str, configured_tokens: int) -> int:

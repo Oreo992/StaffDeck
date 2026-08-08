@@ -54,6 +54,10 @@ def test_operations_summary_uses_canonical_execution_records_without_double_coun
             "evolution_proposal",
         }
         assert {item.kind for item in result.today_items} >= {"session", "scheduled_run"}
+        assert any(
+            item.session_id == "session_owner" and item.status == "已完成"
+            for item in result.today_items
+        )
         assert result.capability_changes[0].label == "竞品研究"
         assert result.capability_changes[0].kind == "skill"
         assert result.capability_changes[0].phase == "applied"
@@ -190,6 +194,7 @@ def _seed_operations(
     ]
     db.add_all(sessions)
     completed_at = NOW - timedelta(days=1)
+    completed_today_at = NOW - timedelta(hours=1)
     db.add_all(
         [
             Message(
@@ -198,7 +203,7 @@ def _seed_operations(
                 session_id="session_owner",
                 role="assistant",
                 content="Owner 完成",
-                created_at=completed_at,
+                created_at=completed_today_at,
             ),
             Message(
                 id="reply_other",

@@ -4,6 +4,11 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.db.models import ChatSession, Message, MessageFeedback, ModelConfig, Tenant, User
 from app.feedback.service import FeedbackAnalysisService, feedback_summary
 from app.llm.client import LLMClient
+from app.llm.output_policy import operation_output_tokens
+
+
+def test_feedback_analysis_has_enough_budget_for_reasoning_models() -> None:
+    assert operation_output_tokens("feedback.analyze", 8192) == 4096
 
 
 def test_feedback_analysis_uses_model_bucket(monkeypatch) -> None:

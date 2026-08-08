@@ -51,6 +51,7 @@ def build_agent_operations_summary(
     if not admin_scope:
         session_conditions.append(ChatSession.user_id == current_user.id)
     sessions = db.exec(select(ChatSession).where(*session_conditions)).all()
+    sessions_by_id = {row.id: row for row in sessions}
 
     run_conditions = [
         ScheduledTaskRun.tenant_id == tenant_id,
@@ -220,6 +221,29 @@ def build_agent_operations_summary(
         for item in attention_items
         if item.kind in {"session", "scheduled_run"} and item.status == "进行中"
     ]
+    running_session_ids = {row.id for row in running_sessions}
+    completed_today_by_session: dict[str, Message] = {}
+    for row in completed_messages:
+        if row.session_id in running_session_ids:
+            continue
+        if _as_utc(row.created_at).astimezone(timezone).date() != today:
+            continue
+        previous = completed_today_by_session.get(row.session_id)
+        if previous is None or _as_utc(row.created_at) > _as_utc(previous.created_at):
+            completed_today_by_session[row.session_id] = row
+    today_items.extend(
+        AgentOperationsItemRead(
+            id=f"completed-session-{row.session_id}",
+            kind="session",
+            title=(sessions_by_id.get(row.session_id).title if sessions_by_id.get(row.session_id) else None)
+            or "已完成对话",
+            description=(row.content or "数字员工已完成本次回复").strip()[:240],
+            status="已完成",
+            timestamp=_iso_utc(row.created_at),
+            session_id=row.session_id,
+        )
+        for row in completed_today_by_session.values()
+    )
     today_items.extend(
         AgentOperationsItemRead(
             id=f"scheduled-task-{row.id}",
