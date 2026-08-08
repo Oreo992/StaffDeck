@@ -144,6 +144,77 @@ def test_learning_requires_agent_manager() -> None:
         assert db.exec(select(CapabilityEvolutionProposal)).all() == []
 
 
+def test_learning_skips_unclear_feedback_without_actionable_issue() -> None:
+    with _test_session() as db:
+        owner, agent, _skill = _seed_learning_evidence(db)
+        feedback = db.get(MessageFeedback, "feedback_1")
+        assert feedback is not None
+        feedback.analysis_bucket = "user_random_or_unclear"
+        db.add(feedback)
+        db.commit()
+
+        proposals = CapabilityEvolutionService(db).learn_from_recent_feedback(
+            tenant_id="tenant_demo",
+            agent_id=agent.id,
+            current_user=owner,
+            now=NOW,
+        )
+
+        assert proposals == []
+
+
+def test_learning_captures_repeated_successful_tool_pattern() -> None:
+    with _test_session() as db:
+        owner, agent, skill = _seed_learning_evidence(db)
+        feedback = db.get(MessageFeedback, "feedback_1")
+        assert feedback is not None
+        db.delete(feedback)
+        for index in (1, 2):
+            session_id = f"successful_session_{index}"
+            db.add(
+                ChatSession(
+                    id=session_id,
+                    tenant_id="tenant_demo",
+                    user_id=owner.id,
+                    agent_id=agent.id,
+                    title=f"成功研究 {index}",
+                )
+            )
+            db.add_all(
+                [
+                    AgentEvent(
+                        tenant_id="tenant_demo",
+                        session_id=session_id,
+                        event_type="claude_skill_loaded",
+                        payload_json={"slug": skill.slug},
+                        created_at=NOW - timedelta(hours=index),
+                    ),
+                    AgentEvent(
+                        tenant_id="tenant_demo",
+                        session_id=session_id,
+                        event_type="tool_call_finished",
+                        payload_json={"tool_name": "readonly.lookup", "success": True},
+                        created_at=NOW - timedelta(hours=index) + timedelta(minutes=1),
+                    ),
+                ]
+            )
+        db.commit()
+
+        proposals = CapabilityEvolutionService(db).learn_from_recent_feedback(
+            tenant_id="tenant_demo",
+            agent_id=agent.id,
+            current_user=owner,
+            now=NOW,
+        )
+
+        assert len(proposals) == 1
+        proposal = proposals[0]
+        assert proposal.target_resource_id == skill.id
+        assert proposal.evidence_json[0]["kind"] == "successful_pattern"
+        assert "只读工具" in proposal.instruction
+        assert "最近 2 次" in proposal.summary
+
+
 def _seed_learning_evidence(db: Session) -> tuple[User, AgentProfile, GeneralSkill]:
     db.add(Tenant(id="tenant_demo", name="Demo"))
     owner = User(

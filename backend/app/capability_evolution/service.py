@@ -23,6 +23,11 @@ from app.security.permissions import ensure_agent_scope_manager
 
 
 LEARNING_SECTION = "## 经审核沉淀的经验"
+SUCCESSFUL_PATTERN_INSTRUCTION = (
+    "涉及外部数据时，先使用获准的只读工具核验；最终回答标注数据源和查询时间，"
+    "缺失字段明确说明，不用猜测补齐"
+)
+NON_ACTIONABLE_FEEDBACK_BUCKETS = {"user_random_or_unclear", "unknown"}
 
 
 class CapabilityEvolutionService:
@@ -54,9 +59,6 @@ class CapabilityEvolutionService:
             )
             .order_by(MessageFeedback.updated_at.asc())
         ).all()
-        if not feedback_rows:
-            return []
-
         bindings = self.db.exec(
             select(AgentResourceBinding).where(
                 AgentResourceBinding.tenant_id == tenant_id,
@@ -93,7 +95,11 @@ class CapabilityEvolutionService:
         for feedback in feedback_rows:
             skill = _latest_loaded_skill(loaded_by_session[feedback.session_id], skills)
             instruction = str((feedback.analysis_json or {}).get("suggested_action") or "").strip()
-            if not skill or not instruction:
+            if (
+                not skill
+                or not instruction
+                or feedback.analysis_bucket in NON_ACTIONABLE_FEEDBACK_BUCKETS
+            ):
                 continue
             fingerprint = _fingerprint(agent_id, skill.id, feedback.analysis_bucket, instruction)
             existing = self.db.exec(
@@ -128,6 +134,101 @@ class CapabilityEvolutionService:
                 source_refs_json=[feedback.id, feedback.session_id],
                 before_content=before,
                 after_content=_append_instruction(before, instruction),
+                fingerprint=fingerprint,
+                created_by_user_id=current_user.id,
+                created_at=now,
+                updated_at=now,
+            )
+            self.db.add(proposal)
+            created.append(proposal)
+
+        skill_loads = self.db.exec(
+            select(AgentEvent)
+            .join(ChatSession, AgentEvent.session_id == ChatSession.id)
+            .where(
+                AgentEvent.tenant_id == tenant_id,
+                AgentEvent.event_type == "claude_skill_loaded",
+                AgentEvent.created_at >= cutoff,
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.agent_id == agent_id,
+            )
+            .order_by(AgentEvent.created_at.asc())
+        ).all()
+        sessions_by_slug: dict[str, set[str]] = defaultdict(set)
+        for event in skill_loads:
+            slug = str((event.payload_json or {}).get("slug") or "")
+            if slug in skills:
+                sessions_by_slug[slug].add(event.session_id)
+
+        candidate_session_ids = sorted(
+            {session_id for session_ids in sessions_by_slug.values() for session_id in session_ids}
+        )
+        successful_sessions: set[str] = set()
+        if candidate_session_ids:
+            for event in self.db.exec(
+                select(AgentEvent).where(
+                    AgentEvent.tenant_id == tenant_id,
+                    AgentEvent.session_id.in_(candidate_session_ids),
+                    AgentEvent.event_type == "tool_call_finished",
+                )
+            ).all():
+                if (event.payload_json or {}).get("success") is True:
+                    successful_sessions.add(event.session_id)
+
+        for slug, session_ids in sessions_by_slug.items():
+            verified_sessions = sorted(session_ids & successful_sessions)
+            if len(verified_sessions) < 2:
+                continue
+            skill = skills[slug]
+            has_pending_for_skill = self.db.exec(
+                select(CapabilityEvolutionProposal).where(
+                    CapabilityEvolutionProposal.tenant_id == tenant_id,
+                    CapabilityEvolutionProposal.agent_id == agent_id,
+                    CapabilityEvolutionProposal.target_resource_id == skill.id,
+                    CapabilityEvolutionProposal.status == "pending",
+                )
+            ).first()
+            if has_pending_for_skill:
+                continue
+            fingerprint = _fingerprint(
+                agent_id,
+                skill.id,
+                "successful_pattern",
+                SUCCESSFUL_PATTERN_INSTRUCTION,
+            )
+            existing = self.db.exec(
+                select(CapabilityEvolutionProposal).where(
+                    CapabilityEvolutionProposal.tenant_id == tenant_id,
+                    CapabilityEvolutionProposal.agent_id == agent_id,
+                    CapabilityEvolutionProposal.fingerprint == fingerprint,
+                    CapabilityEvolutionProposal.status.in_(["pending", "applied"]),
+                )
+            ).first()
+            if existing:
+                continue
+            summary = (
+                f"最近 {len(verified_sessions)} 次使用「{skill.name}」的工作都通过只读工具"
+                "取得了真实数据。这套做法稳定有效，值得固定下来。"
+            )
+            before = skill.skill_markdown
+            proposal = CapabilityEvolutionProposal(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                target_resource_id=skill.id,
+                target_label=skill.name,
+                title=f"保留「{skill.name}」中有效的数据核验习惯",
+                summary=summary,
+                instruction=SUCCESSFUL_PATTERN_INSTRUCTION,
+                evidence_json=[
+                    {
+                        "kind": "successful_pattern",
+                        "session_ids": verified_sessions,
+                        "summary": summary,
+                    }
+                ],
+                source_refs_json=verified_sessions,
+                before_content=before,
+                after_content=_append_instruction(before, SUCCESSFUL_PATTERN_INSTRUCTION),
                 fingerprint=fingerprint,
                 created_by_user_id=current_user.id,
                 created_at=now,
