@@ -150,6 +150,28 @@ def _migrate_sqlite_skill_schema() -> None:
             if "effect_level" not in tool_columns:
                 conn.execute(text("ALTER TABLE tools ADD COLUMN effect_level VARCHAR"))
 
+        if "mcp_servers" in tables:
+            mcp_server_columns = {
+                column["name"] for column in inspector.get_columns("mcp_servers")
+            }
+            if "integration_kind" not in mcp_server_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE mcp_servers ADD COLUMN integration_kind "
+                        "VARCHAR NOT NULL DEFAULT 'custom'"
+                    )
+                )
+            if "secret_header_name" not in mcp_server_columns:
+                conn.execute(text("ALTER TABLE mcp_servers ADD COLUMN secret_header_name VARCHAR"))
+            if "secret_value_encrypted" not in mcp_server_columns:
+                conn.execute(
+                    text("ALTER TABLE mcp_servers ADD COLUMN secret_value_encrypted VARCHAR")
+                )
+            if "rate_limit_per_second" not in mcp_server_columns:
+                conn.execute(
+                    text("ALTER TABLE mcp_servers ADD COLUMN rate_limit_per_second FLOAT")
+                )
+
         if "ui_configs" in tables:
             ui_columns = {column["name"] for column in inspector.get_columns("ui_configs")}
             if "reflection_max_rounds" not in ui_columns:

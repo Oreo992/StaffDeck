@@ -1,9 +1,12 @@
 import sys
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.api import tools as tools_api
 from app.api.tools import (
     create_mcp_server,
     delete_mcp_server,
@@ -17,6 +20,8 @@ from app.db.models import AgentProfile, AgentResourceBinding
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import (
     MCPDiscoverRequest,
+    MCPDiscoverResponse,
+    MCPDiscoveredTool,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPSyncRequest,
@@ -328,6 +333,129 @@ def test_delete_mcp_server_removes_tools() -> None:
         assert result == {"status": "deleted"}
         assert db.get(MCPServer, server.id) is None
         assert len(db.exec(select(Tool).where(Tool.mcp_server_id == server.id)).all()) == 0
+
+
+def test_lingxing_official_mcp_encrypts_key_and_only_injects_it_at_execution() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        created = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="lingxing_erp",
+                integration_kind="lingxing_official",
+                connection=MCPServerConnection(
+                    transport="streamable_http",
+                    url="https://openmcp.lingxing.example/mcp-servers/tenant",
+                ),
+                secret_header_name="X-Mcp-Key",
+                secret_value="lingxing-private-key",
+            ),
+            db,
+            _admin_user(),
+        )
+
+        stored = db.get(MCPServer, created.id)
+        assert stored is not None
+        assert stored.secret_value_encrypted
+        assert stored.secret_value_encrypted != "lingxing-private-key"
+        assert created.connection.headers == {}
+        assert created.secret_header_name == "X-Mcp-Key"
+        assert created.has_secret is True
+        assert created.rate_limit_per_second == 1.0
+        assert "lingxing-private-key" not in str(created.model_dump())
+
+        config = ToolExecutor(db)._server_client_config(stored)  # noqa: SLF001
+        assert config["headers"] == {"X-Mcp-Key": "lingxing-private-key"}
+
+
+def test_lingxing_official_mcp_rejects_plaintext_header_and_missing_key() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        with pytest.raises(HTTPException) as plaintext_error:
+            create_mcp_server(
+                MCPServerCreateRequest(
+                    tenant_id="tenant_demo",
+                    name="lingxing_plaintext",
+                    integration_kind="lingxing_official",
+                    connection=MCPServerConnection(
+                        transport="streamable_http",
+                        url="https://openmcp.lingxing.example/mcp-servers/tenant",
+                        headers={"X-Mcp-Key": "must-not-persist"},
+                    ),
+                    secret_header_name="X-Mcp-Key",
+                    secret_value="lingxing-private-key",
+                ),
+                db,
+                _admin_user(),
+            )
+        assert "安全鉴权 Header" in str(plaintext_error.value.detail)
+
+        with pytest.raises(HTTPException) as missing_key_error:
+            create_mcp_server(
+                MCPServerCreateRequest(
+                    tenant_id="tenant_demo",
+                    name="lingxing_missing_key",
+                    integration_kind="lingxing_official",
+                    connection=MCPServerConnection(
+                        transport="streamable_http",
+                        url="https://openmcp.lingxing.example/mcp-servers/tenant",
+                    ),
+                ),
+                db,
+                _admin_user(),
+            )
+        assert "X-Mcp-Key" in str(missing_key_error.value.detail)
+
+
+def test_lingxing_sync_assigns_conservative_effect_levels(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="lingxing_erp",
+                integration_kind="lingxing_official",
+                connection=MCPServerConnection(
+                    transport="streamable_http",
+                    url="https://openmcp.lingxing.example/mcp-servers/tenant",
+                ),
+                secret_header_name="X-Mcp-Key",
+                secret_value="lingxing-private-key",
+            ),
+            db,
+            _admin_user(),
+        )
+
+        monkeypatch.setattr(
+            tools_api,
+            "_discover_response",
+            lambda connection, integration_kind="custom": MCPDiscoverResponse(
+                success=True,
+                tools=[
+                    MCPDiscoveredTool(name="get_my_sids"),
+                    MCPDiscoveredTool(name="update_listing_price"),
+                ],
+            ),
+        )
+
+        synced = sync_mcp_tools(
+            server.id,
+            MCPSyncRequest(tenant_id="tenant_demo"),
+            db,
+            current_user=_admin_user(),
+        )
+        assert synced.success is True
+        tools_by_leaf_name = {
+            str((tool.config_json or {}).get("tool")): tool
+            for tool in db.exec(select(Tool).where(Tool.mcp_server_id == server.id)).all()
+        }
+        assert tools_by_leaf_name["get_my_sids"].effect_level == "read"
+        assert tools_by_leaf_name["update_listing_price"].effect_level == "write"
 
 
 def _mock_mcp_server_path() -> Path:

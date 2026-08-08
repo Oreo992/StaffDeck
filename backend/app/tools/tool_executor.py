@@ -9,11 +9,13 @@ from sqlmodel import Session, select
 from app.agents.branching import visible_tool_rows
 from app.config import get_settings
 from app.db.models import MCPServer, Tool
+from app.security.encryption import decrypt_secret
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool
+from app.tools.mcp_policy import MCP_SERVER_RATE_LIMITER
 from app.tools.secret_refs import resolve_secret_reference, resolve_secret_references
 from app.tools.tool_schema import ToolCall, ToolError, ToolResult
-from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 
 
 class ToolExecutor:
@@ -114,6 +116,7 @@ class ToolExecutor:
         server = self.db.get(MCPServer, tool.mcp_server_id)
         if server is None:
             raise MCPClientError("MCP 工具关联的 Server 不存在或已删除。")
+        MCP_SERVER_RATE_LIMITER.wait(server.id, server.rate_limit_per_second)
         return self._server_client_config(server), tool_name
 
     def _server_client_config(self, server: MCPServer) -> dict[str, Any]:
@@ -121,8 +124,14 @@ class ToolExecutor:
         config: dict[str, Any] = {"transport": transport}
         if transport in {"streamable_http", "sse"}:
             config["url"] = server.url or ""
-            if server.headers_json:
-                config["headers"] = dict(server.headers_json)
+            headers = dict(server.headers_json or {})
+            if server.secret_header_name and server.secret_value_encrypted:
+                try:
+                    headers[server.secret_header_name] = decrypt_secret(server.secret_value_encrypted)
+                except ValueError as exc:
+                    raise MCPClientError("MCP 安全凭证无法解密，请在网页端重新保存。") from exc
+            if headers:
+                config["headers"] = headers
         elif transport == "stdio":
             config["command"] = server.command or ""
             config["args"] = list(server.args_json or [])

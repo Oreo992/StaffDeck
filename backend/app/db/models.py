@@ -457,11 +457,18 @@ class MCPServer(SQLModel, table=True):
     display_name: Optional[str] = None
     description: Optional[str] = None
     bucket: str = Field(default="MCP 工具", index=True)
+    # 用于套用受控接入策略；旧 Server 默认为 custom。
+    integration_kind: str = Field(default="custom", index=True)
     # 连接方式：stdio / streamable_http / sse / builtin
     transport: str = Field(default="streamable_http", index=True)
     # streamable_http / sse 使用
     url: Optional[str] = None
     headers_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # 单个安全 Header 的值以应用密钥加密保存；绝不通过 API 返回明文。
+    secret_header_name: Optional[str] = None
+    secret_value_encrypted: Optional[str] = None
+    # 外部服务的共享限流，例如领星官方 MCP 为 1 QPS。
+    rate_limit_per_second: Optional[float] = None
     # stdio 使用
     command: Optional[str] = None
     args_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))

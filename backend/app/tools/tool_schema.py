@@ -110,6 +110,7 @@ class ToolProbeResponse(BaseModel):
 
 
 MCPTransport = Literal["stdio", "streamable_http", "sse", "builtin"]
+MCPIntegrationKind = Literal["custom", "lingxing_official"]
 
 
 class MCPServerConnection(BaseModel):
@@ -130,7 +131,13 @@ class MCPServerCreateRequest(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     bucket: str = "MCP 工具"
+    integration_kind: MCPIntegrationKind = "custom"
     connection: MCPServerConnection = Field(default_factory=MCPServerConnection)
+    # Cleartext is accepted only in this write request and encrypted before persistence.
+    secret_header_name: Optional[str] = None
+    secret_value: Optional[str] = None
+    clear_secret: bool = False
+    rate_limit_per_second: Optional[float] = Field(default=None, gt=0, le=100)
     enabled: bool = True
 
 
@@ -147,6 +154,8 @@ class MCPDiscoveredTool(BaseModel):
     imported: bool = False
     tool_id: Optional[str] = None
     enabled: Optional[bool] = None
+    recommended_effect_level: Optional[Literal["read", "write", "destructive"]] = None
+    recommended_for_qqq: bool = False
 
 
 class MCPServerRead(BaseModel):
@@ -156,7 +165,11 @@ class MCPServerRead(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     bucket: str
+    integration_kind: MCPIntegrationKind = "custom"
     connection: MCPServerConnection
+    secret_header_name: Optional[str] = None
+    has_secret: bool = False
+    rate_limit_per_second: Optional[float] = None
     enabled: bool
     last_synced_at: Optional[str] = None
     tool_count: int = 0

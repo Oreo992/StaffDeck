@@ -69,6 +69,7 @@ import type {
   MCPDiscoverResponse,
   MCPSyncResponse,
   MCPTransport,
+  MCPIntegrationKind,
   MCPDiscoveredTool,
 } from '../types';
 
@@ -1252,9 +1253,13 @@ type McpFormValues = {
   display_name: string;
   description: string;
   bucket: string;
+  integration_kind: MCPIntegrationKind;
   transport: MCPTransport;
   url: string;
   headers: string;
+  secret_value: string;
+  clear_secret: boolean;
+  rate_limit_per_second: string;
   command: string;
   args: string;
   env: string;
@@ -1267,9 +1272,13 @@ const MCP_FORM_INITIAL_VALUES: McpFormValues = {
   display_name: '',
   description: '',
   bucket: 'MCP 工具',
+  integration_kind: 'custom',
   transport: 'streamable_http',
   url: '',
   headers: '{}',
+  secret_value: '',
+  clear_secret: false,
+  rate_limit_per_second: '',
   command: '',
   args: '',
   env: '{}',
@@ -1294,6 +1303,25 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   const setField = <K extends keyof McpFormValues>(name: K, value: McpFormValues[K]) =>
     setValues((prev) => ({ ...prev, [name]: value }));
 
+  function setIntegrationKind(integrationKind: MCPIntegrationKind) {
+    setValues((prev) => {
+      if (integrationKind !== 'lingxing_official') {
+        return { ...prev, integration_kind: integrationKind };
+      }
+      return {
+        ...prev,
+        integration_kind: integrationKind,
+        transport: 'streamable_http',
+        name: prev.name || 'lingxing_erp',
+        display_name: prev.display_name || '领星 ERP（官方 MCP）',
+        description: prev.description || '通过领星官方 MCP 查询库存、Listing、竞品和报表。',
+        bucket: prev.bucket === 'MCP 工具' ? '领星 ERP' : prev.bucket,
+        rate_limit_per_second: prev.rate_limit_per_second || '1',
+      };
+    });
+    setDiscovered([]);
+  }
+
   useEffect(() => {
     if (!isEdit) {
       setValues({ ...MCP_FORM_INITIAL_VALUES });
@@ -1316,6 +1344,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   const transportOption = TRANSPORT_OPTIONS.find((item) => item.value === values.transport);
   const isRemote = values.transport === 'streamable_http' || values.transport === 'sse';
   const isStdio = values.transport === 'stdio';
+  const isLingxingOfficial = values.integration_kind === 'lingxing_official';
 
   function buildConnection(): MCPServerConnection | null {
     let headers: Record<string, string>;
@@ -1353,6 +1382,15 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   function buildPayload(): { payload: Record<string, unknown>; connection: MCPServerConnection } | null {
     const connection = buildConnection();
     if (!connection) return null;
+    const rawRateLimit = values.rate_limit_per_second.trim();
+    let rateLimit: number | null = null;
+    if (rawRateLimit) {
+      rateLimit = Number(rawRateLimit);
+      if (!Number.isFinite(rateLimit) || rateLimit <= 0) {
+        notify.error('调用频率必须是大于 0 的数字');
+        return null;
+      }
+    }
     return {
       connection,
       payload: {
@@ -1361,7 +1399,12 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
         display_name: values.display_name,
         description: values.description,
         bucket: values.bucket || 'MCP 工具',
+        integration_kind: values.integration_kind,
         connection,
+        secret_header_name: isLingxingOfficial ? 'X-Mcp-Key' : null,
+        secret_value: values.secret_value.trim() || null,
+        clear_secret: values.clear_secret,
+        rate_limit_per_second: rateLimit,
         enabled: values.enabled,
       },
     };
@@ -1393,6 +1436,14 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   }
 
   async function discover() {
+    if (isLingxingOfficial && !server) {
+      notify.warning('请先保存领星官方 MCP；密钥会在服务端加密后再用于工具发现。');
+      return;
+    }
+    if (isLingxingOfficial && values.secret_value.trim()) {
+      notify.warning('请先保存新的 X-Mcp-Key，再发现工具。');
+      return;
+    }
     const built = buildPayload();
     if (!built) return;
     setDiscovering(true);
@@ -1410,7 +1461,10 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
         notify.error(response.error?.message || '发现工具失败');
         return;
       }
-      setDiscovered(response.tools.map((tool) => ({ ...tool, selected: !tool.imported })));
+      setDiscovered(response.tools.map((tool) => ({
+        ...tool,
+        selected: !tool.imported && (!isLingxingOfficial || tool.recommended_for_qqq),
+      })));
       notify.success(`发现 ${response.tools.length} 个工具`);
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '发现工具失败');
@@ -1497,6 +1551,20 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
       ),
     },
     {
+      key: 'policy',
+      title: '权限',
+      width: 100,
+      render: (row) => {
+        if (!isLingxingOfficial) return <span className="text-[#858b9c]">按配置</span>;
+        const isRead = row.recommended_effect_level === 'read';
+        return (
+          <span className={isRead ? 'text-[#159947]' : 'text-[#bb7b00]'}>
+            {isRead ? '推荐只读' : '需确认'}
+          </span>
+        );
+      },
+    },
+    {
       key: 'imported',
       title: '状态',
       width: 96,
@@ -1527,6 +1595,48 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
       <div className="grid grid-cols-1 items-start gap-[20px] xl:grid-cols-2">
         <SectionCard title="连接配置" loading={loading && isEdit && !server}>
           <div className="flex flex-col gap-[16px]">
+            <Field
+              label="接入模板"
+              hint="选择官方模板会套用领星的鉴权、安全策略和 1 QPS 限流。"
+            >
+              <div className="grid grid-cols-1 gap-[8px] sm:grid-cols-2" role="group" aria-label="接入模板">
+                <button
+                  type="button"
+                  aria-pressed={!isLingxingOfficial}
+                  onClick={() => setIntegrationKind('custom')}
+                  className={cn(
+                    'min-h-[42px] rounded-[10px] border px-[12px] text-left text-[13px] font-medium transition-colors',
+                    !isLingxingOfficial
+                      ? 'border-[#1a71ff] bg-[#f1f7ff] text-[#1a71ff]'
+                      : 'border-[#e6e8eb] bg-white text-[#5f6573] hover:border-[#bfc5cf]',
+                  )}
+                >
+                  自定义 MCP
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={isLingxingOfficial}
+                  onClick={() => setIntegrationKind('lingxing_official')}
+                  className={cn(
+                    'min-h-[42px] rounded-[10px] border px-[12px] text-left text-[13px] font-medium transition-colors',
+                    isLingxingOfficial
+                      ? 'border-[#278c39] bg-[#f3fbf4] text-[#217a32]'
+                      : 'border-[#e6e8eb] bg-white text-[#5f6573] hover:border-[#bfc5cf]',
+                  )}
+                >
+                  领星 ERP（官方 MCP）
+                </button>
+              </div>
+            </Field>
+
+            {isLingxingOfficial && (
+              <div className="rounded-[12px] border border-[#cfe9d4] bg-[#f5fbf6] px-[14px] py-[12px] text-[13px] leading-[1.65] text-[#35643e]">
+                <strong className="block text-[#217a32]">领星官方 MCP</strong>
+                从领星 ERP 的“AI 助手 → 管理 MCP”复制服务地址和 X-Mcp-Key。密钥只会在服务端加密保存，
+                不会显示给模型或出现在工具列表中。
+              </div>
+            )}
+
             <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-2">
               <Field
                 label="名称"
@@ -1574,6 +1684,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
               <UISelect
                 value={values.transport}
                 onValueChange={(value) => setField('transport', value as MCPTransport)}
+                disabled={isLingxingOfficial}
               >
                 <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
                   <SelectValue />
@@ -1590,15 +1701,23 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
 
             {isRemote && (
               <>
-                <Field label="URL" htmlFor="mcp-url">
+                <Field
+                  label="URL"
+                  htmlFor="mcp-url"
+                  hint={isLingxingOfficial ? '粘贴领星为当前账号生成的 MCP 服务地址。' : undefined}
+                >
                   <Input
                     id="mcp-url"
-                    placeholder="https://example.com/mcp"
+                    placeholder={isLingxingOfficial ? '粘贴领星 MCP 服务地址' : 'https://example.com/mcp'}
                     value={values.url}
                     onChange={(event) => setField('url', event.target.value)}
                   />
                 </Field>
-                <Field label="Headers JSON" htmlFor="mcp-headers">
+                <Field
+                  label={isLingxingOfficial ? '其他 Headers JSON' : 'Headers JSON'}
+                  htmlFor="mcp-headers"
+                  hint={isLingxingOfficial ? '不要在这里填写 X-Mcp-Key。' : undefined}
+                >
                   <Textarea
                     id="mcp-headers"
                     rows={4}
@@ -1607,6 +1726,56 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
                     onChange={(event) => setField('headers', event.target.value)}
                   />
                 </Field>
+                {isLingxingOfficial && (
+                  <>
+                    <Field
+                      label="X-Mcp-Key"
+                      htmlFor="mcp-secret-value"
+                      hint={server?.has_secret ? '已安全保存；留空会保留原密钥。' : '此值只在保存时传输，随后加密保存。'}
+                    >
+                      <Input
+                        id="mcp-secret-value"
+                        type="password"
+                        autoComplete="new-password"
+                        placeholder={server?.has_secret ? '输入新密钥以替换' : '粘贴领星生成的 X-Mcp-Key'}
+                        value={values.secret_value}
+                        onChange={(event) =>
+                          setValues((prev) => ({
+                            ...prev,
+                            secret_value: event.target.value,
+                            clear_secret: false,
+                          }))
+                        }
+                      />
+                    </Field>
+                    {server?.has_secret && (
+                      <label className="flex items-center gap-[8px] text-[13px] text-[#5f6573]">
+                        <Checkbox
+                          checked={values.clear_secret}
+                          onCheckedChange={(next) =>
+                            setValues((prev) => ({
+                              ...prev,
+                              clear_secret: next === true,
+                              enabled: next === true ? false : prev.enabled,
+                            }))
+                          }
+                        />
+                        清除已保存的 X-Mcp-Key（保存后会自动停用该工具集）
+                      </label>
+                    )}
+                    <Field label="调用频率（QPS）" htmlFor="mcp-rate-limit" hint="领星官方 MCP 统一限制为 1 QPS。">
+                      <Input
+                        id="mcp-rate-limit"
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        value={values.rate_limit_per_second}
+                        disabled
+                        onChange={(event) => setField('rate_limit_per_second', event.target.value)}
+                      />
+                    </Field>
+                  </>
+                )}
               </>
             )}
 
@@ -1677,7 +1846,9 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
         >
           <p className={HINT_CLASS}>
             {server
-              ? '点击「发现工具」拉取 tools/list，勾选后「导入/同步」即可生成工具行。'
+              ? isLingxingOfficial
+                ? '默认仅勾选 QQQ 可安全使用的只读工具；其他工具需要你手动勾选，并在调用前确认。'
+                : '点击「发现工具」拉取 tools/list，勾选后「导入/同步」即可生成工具行。'
               : '请先保存 MCP 服务器，才能导入并同步工具。'}
           </p>
           {discovered.length ? (
@@ -2141,9 +2312,17 @@ function serverToFormValues(row: MCPServerRead): McpFormValues {
     display_name: row.display_name || '',
     description: row.description || '',
     bucket: row.bucket || 'MCP 工具',
+    integration_kind: row.integration_kind || 'custom',
     transport: connection.transport,
     url: connection.url || '',
     headers: JSON.stringify(connection.headers || {}, null, 2),
+    secret_value: '',
+    clear_secret: false,
+    rate_limit_per_second: row.rate_limit_per_second
+      ? String(row.rate_limit_per_second)
+      : row.integration_kind === 'lingxing_official'
+        ? '1'
+        : '',
     command: connection.command || '',
     args: (connection.args || []).join('\n'),
     env: JSON.stringify(connection.env || {}, null, 2),

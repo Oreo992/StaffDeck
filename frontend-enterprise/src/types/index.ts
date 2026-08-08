@@ -368,6 +368,7 @@ export type ToolRead = {
 };
 
 export type MCPTransport = 'stdio' | 'streamable_http' | 'sse' | 'builtin';
+export type MCPIntegrationKind = 'custom' | 'lingxing_official';
 
 export type MCPServerConnection = {
   transport: MCPTransport;
@@ -386,7 +387,11 @@ export type MCPServerRead = {
   display_name?: string;
   description?: string;
   bucket: string;
+  integration_kind: MCPIntegrationKind;
   connection: MCPServerConnection;
+  secret_header_name?: string | null;
+  has_secret: boolean;
+  rate_limit_per_second?: number | null;
   enabled: boolean;
   last_synced_at?: string | null;
   tool_count: number;
@@ -402,6 +407,8 @@ export type MCPDiscoveredTool = {
   imported: boolean;
   tool_id?: string | null;
   enabled?: boolean | null;
+  recommended_effect_level?: 'read' | 'write' | 'destructive' | null;
+  recommended_for_qqq: boolean;
 };
 
 export type MCPDiscoverResponse = {

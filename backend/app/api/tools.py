@@ -21,6 +21,7 @@ from app.agents.branching import (
 from app.config import get_settings
 from app.db import get_session
 from app.db.models import AgentProfile, AgentResourceBinding, MCPServer, Tool, User, utc_now
+from app.security.encryption import decrypt_secret, encrypt_secret
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -32,6 +33,12 @@ from app.security.tenant import ensure_tenant
 from app.tools import ToolExecutor
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool, list_mcp_tools
+from app.tools.mcp_policy import (
+    LINGXING_OFFICIAL_INTEGRATION,
+    MCP_SERVER_RATE_LIMITER,
+    is_qqq_recommended_read_tool,
+    suggested_effect_level,
+)
 from app.tools.secret_refs import resolve_secret_references
 from app.tools.tool_schema import (
     MCPDiscoverRequest,
@@ -557,6 +564,71 @@ def _server_connection(row: MCPServer) -> MCPServerConnection:
     )
 
 
+def _connection_with_secure_header(
+    row: MCPServer, connection: MCPServerConnection | None = None
+) -> MCPServerConnection:
+    """Add the encrypted server credential only while making an MCP request."""
+    base = connection or _server_connection(row)
+    headers = dict(base.headers or {})
+    if row.secret_header_name and row.secret_value_encrypted:
+        try:
+            headers[row.secret_header_name] = decrypt_secret(row.secret_value_encrypted)
+        except ValueError as exc:
+            raise MCPClientError("MCP 安全凭证无法解密，请在网页端重新保存。") from exc
+    return MCPServerConnection(
+        transport=base.transport,
+        url=base.url,
+        headers=headers,
+        command=base.command,
+        args=list(base.args or []),
+        env=dict(base.env or {}),
+        cwd=base.cwd,
+    )
+
+
+def _normalized_optional_text(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def _contains_header(headers: dict[str, str], header_name: str) -> bool:
+    expected = header_name.casefold()
+    return any(key.casefold() == expected for key in headers)
+
+
+def _validate_mcp_server_security(
+    *,
+    integration_kind: str,
+    connection: MCPServerConnection,
+    secret_header_name: str | None,
+    has_secret: bool,
+    rate_limit_per_second: float | None,
+    enabled: bool,
+) -> tuple[str | None, float | None]:
+    """Validate curated MCP settings without ever persisting a cleartext secret."""
+    if secret_header_name and _contains_header(connection.headers, secret_header_name):
+        raise HTTPException(
+            status_code=422,
+            detail="安全鉴权 Header 不能写在 Headers JSON 中，请使用单独的安全密钥字段。",
+        )
+
+    if integration_kind != LINGXING_OFFICIAL_INTEGRATION:
+        return secret_header_name, rate_limit_per_second
+
+    if connection.transport != "streamable_http":
+        raise HTTPException(status_code=422, detail="领星官方 MCP 仅支持 Streamable HTTP。")
+    if not (connection.url or "").strip().startswith("https://"):
+        raise HTTPException(status_code=422, detail="领星官方 MCP 必须使用领星提供的 HTTPS 地址。")
+    if secret_header_name not in {None, "X-Mcp-Key"}:
+        raise HTTPException(status_code=422, detail="领星官方 MCP 的鉴权 Header 必须为 X-Mcp-Key。")
+    if enabled and not has_secret:
+        raise HTTPException(
+            status_code=422,
+            detail="启用领星官方 MCP 前，请填写从领星“管理 MCP”复制的 X-Mcp-Key。",
+        )
+    return "X-Mcp-Key", rate_limit_per_second or 1.0
+
+
 def _connection_to_client_config(connection: MCPServerConnection) -> dict[str, Any]:
     """把结构化连接配置转成 mcp_client 认识的扁平 config。"""
     config: dict[str, Any] = {"transport": connection.transport}
@@ -585,7 +657,15 @@ def mcp_server_read(row: MCPServer, db: Session) -> MCPServerRead:
         display_name=row.display_name,
         description=row.description,
         bucket=row.bucket or "MCP 工具",
+        integration_kind=(
+            LINGXING_OFFICIAL_INTEGRATION
+            if row.integration_kind == LINGXING_OFFICIAL_INTEGRATION
+            else "custom"
+        ),
         connection=_server_connection(row),
+        secret_header_name=row.secret_header_name,
+        has_secret=bool(row.secret_value_encrypted),
+        rate_limit_per_second=row.rate_limit_per_second,
         enabled=row.enabled,
         last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
         tool_count=tool_count,
@@ -625,15 +705,31 @@ def create_mcp_server(
             status_code=409, detail="MCP server name already exists for this tenant"
         )
     conn = request.connection
+    secret_header_name = _normalized_optional_text(request.secret_header_name)
+    secret_value = _normalized_optional_text(request.secret_value)
+    if secret_value and not secret_header_name:
+        raise HTTPException(status_code=422, detail="填写安全密钥时必须同时填写鉴权 Header 名。")
+    secret_header_name, rate_limit_per_second = _validate_mcp_server_security(
+        integration_kind=request.integration_kind,
+        connection=conn,
+        secret_header_name=secret_header_name,
+        has_secret=bool(secret_value),
+        rate_limit_per_second=request.rate_limit_per_second,
+        enabled=request.enabled,
+    )
     row = MCPServer(
         tenant_id=request.tenant_id,
         name=request.name,
         display_name=request.display_name,
         description=request.description,
         bucket=_normalize_bucket(request.bucket) if request.bucket else "MCP 工具",
+        integration_kind=request.integration_kind,
         transport=conn.transport,
         url=conn.url,
         headers_json=conn.headers,
+        secret_header_name=secret_header_name,
+        secret_value_encrypted=encrypt_secret(secret_value) if secret_value else None,
+        rate_limit_per_second=rate_limit_per_second,
         command=conn.command,
         args_json=conn.args,
         env_json=conn.env,
@@ -666,13 +762,42 @@ def update_mcp_server(
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     conn = request.connection
+    incoming_secret = _normalized_optional_text(request.secret_value)
+    if request.clear_secret and incoming_secret:
+        raise HTTPException(status_code=422, detail="请在清除安全密钥和保存新密钥之间选择其一。")
+    requested_header_name = _normalized_optional_text(request.secret_header_name)
+    secret_header_name = requested_header_name or row.secret_header_name
+    if incoming_secret and not secret_header_name:
+        raise HTTPException(status_code=422, detail="填写安全密钥时必须同时填写鉴权 Header 名。")
+    secret_value_encrypted = row.secret_value_encrypted
+    if request.clear_secret:
+        secret_value_encrypted = None
+    elif incoming_secret:
+        secret_value_encrypted = encrypt_secret(incoming_secret)
+    rate_limit_per_second = (
+        request.rate_limit_per_second
+        if request.rate_limit_per_second is not None
+        else row.rate_limit_per_second
+    )
+    secret_header_name, rate_limit_per_second = _validate_mcp_server_security(
+        integration_kind=request.integration_kind,
+        connection=conn,
+        secret_header_name=secret_header_name,
+        has_secret=bool(secret_value_encrypted),
+        rate_limit_per_second=rate_limit_per_second,
+        enabled=request.enabled,
+    )
     row.name = request.name
     row.display_name = request.display_name
     row.description = request.description
     row.bucket = _normalize_bucket(request.bucket) if request.bucket else "MCP 工具"
+    row.integration_kind = request.integration_kind
     row.transport = conn.transport
     row.url = conn.url
     row.headers_json = conn.headers
+    row.secret_header_name = secret_header_name
+    row.secret_value_encrypted = secret_value_encrypted
+    row.rate_limit_per_second = rate_limit_per_second
     row.command = conn.command
     row.args_json = conn.args
     row.env_json = conn.env
@@ -733,8 +858,15 @@ def discover_mcp_tools(
     """已保存 Server：拉取 tools/list，并标注哪些已导入为 Tool。"""
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
-    connection = request.connection or _server_connection(row)
-    response = _discover_response(connection)
+    try:
+        connection = _connection_with_secure_header(row, request.connection)
+        MCP_SERVER_RATE_LIMITER.wait(row.id, row.rate_limit_per_second)
+    except MCPClientError as exc:
+        return MCPDiscoverResponse(
+            success=False,
+            error=ToolError(code="MCP_DISCOVER_ERROR", message=str(exc)),
+        )
+    response = _discover_response(connection, integration_kind=row.integration_kind)
     if response.success:
         row.discovered_tools_json = [tool.model_dump() for tool in response.tools]
         row.updated_at = utc_now()
@@ -761,8 +893,15 @@ def sync_mcp_tools(
     """把发现到的工具落成 Tool 行（新建/更新 schema），可选择导入的子集。"""
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
-    connection = _server_connection(row)
-    discovery = _discover_response(connection)
+    try:
+        connection = _connection_with_secure_header(row)
+        MCP_SERVER_RATE_LIMITER.wait(row.id, row.rate_limit_per_second)
+    except MCPClientError as exc:
+        return MCPSyncResponse(
+            success=False,
+            error=ToolError(code="MCP_DISCOVER_ERROR", message=str(exc)),
+        )
+    discovery = _discover_response(connection, integration_kind=row.integration_kind)
     if not discovery.success:
         return MCPSyncResponse(success=False, error=discovery.error)
 
@@ -797,6 +936,7 @@ def sync_mcp_tools(
                 output_schema=tool.output_schema or {},
                 allowed_skills_json=[],
                 mcp_server_id=row.id,
+                effect_level=suggested_effect_level(row.integration_kind, tool.name),
                 enabled=True,
             )
             db.add(new_row)
@@ -808,6 +948,8 @@ def sync_mcp_tools(
             current.input_schema = tool.input_schema or current.input_schema
             current.output_schema = tool.output_schema or current.output_schema
             current.config_json = {"tool": tool.name}
+            if current.effect_level is None:
+                current.effect_level = suggested_effect_level(row.integration_kind, tool.name)
             current.updated_at = utc_now()
             db.add(current)
             touched_tool_ids.append(current.id)
@@ -844,7 +986,9 @@ def sync_mcp_tools(
     return MCPSyncResponse(success=True, imported=imported, updated=updated, removed=[])
 
 
-def _discover_response(connection: MCPServerConnection) -> MCPDiscoverResponse:
+def _discover_response(
+    connection: MCPServerConnection, integration_kind: str = "custom"
+) -> MCPDiscoverResponse:
     config = resolve_secret_references(_connection_to_client_config(connection))
     try:
         tools = list_mcp_tools(config, timeout_seconds=get_settings().tool_timeout_seconds)
@@ -866,6 +1010,12 @@ def _discover_response(connection: MCPServerConnection) -> MCPDiscoverResponse:
                 description=item.get("description", ""),
                 input_schema=item.get("input_schema", {}),
                 output_schema=item.get("output_schema", {}),
+                recommended_effect_level=suggested_effect_level(
+                    integration_kind, str(item.get("name") or "")
+                ),
+                recommended_for_qqq=is_qqq_recommended_read_tool(
+                    integration_kind, str(item.get("name") or "")
+                ),
             )
             for item in tools
             if item.get("name")
