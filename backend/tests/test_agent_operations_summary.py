@@ -45,6 +45,7 @@ def test_operations_summary_uses_canonical_execution_records_without_double_coun
         assert result.metrics.running == 2
         assert result.metrics.awaiting_confirmation == 2
         assert result.metrics.completed == 3
+        assert result.metrics.effective_tasks == 3
         assert result.metrics.capability_changes == 1
         assert sum(point.value for point in result.completion_trend) == 3
         assert {item.kind for item in result.attention_items} >= {
@@ -58,6 +59,11 @@ def test_operations_summary_uses_canonical_execution_records_without_double_coun
             item.session_id == "session_owner" and item.status == "已完成"
             for item in result.today_items
         )
+        assert {item.session_id for item in result.recent_items} >= {
+            "session_owner",
+            "session_other",
+            "session_scheduled_success",
+        }
         assert result.capability_changes[0].label == "竞品研究"
         assert result.capability_changes[0].kind == "skill"
         assert result.capability_changes[0].phase == "applied"

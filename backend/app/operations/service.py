@@ -260,6 +260,32 @@ def build_agent_operations_summary(
     )
     today_items.sort(key=lambda item: item.timestamp, reverse=True)
 
+    completed_by_session: dict[str, Message] = {}
+    for row in completed_messages:
+        if row.session_id in running_session_ids:
+            continue
+        previous = completed_by_session.get(row.session_id)
+        if previous is None or _as_utc(row.created_at) > _as_utc(previous.created_at):
+            completed_by_session[row.session_id] = row
+    recent_items = [
+        AgentOperationsItemRead(
+            id=f"recent-session-{row.session_id}",
+            kind="session",
+            title=(sessions_by_id.get(row.session_id).title if sessions_by_id.get(row.session_id) else None)
+            or "已完成对话",
+            description=(row.content or "数字员工已完成本次回复").strip()[:240],
+            status="已完成",
+            timestamp=_iso_utc(row.created_at),
+            session_id=row.session_id,
+        )
+        for row in completed_by_session.values()
+    ]
+    recent_items.extend(
+        _scheduled_run_item(row, tasks_by_id.get(row.scheduled_task_id), status="已完成")
+        for row in completed_runs
+    )
+    recent_items.sort(key=lambda item: item.timestamp, reverse=True)
+
     return AgentOperationsSummaryRead(
         agent_id=agent_id,
         timezone=timezone_name,
@@ -269,10 +295,12 @@ def build_agent_operations_summary(
             running=len(running_sessions) + len(running_runs),
             awaiting_confirmation=len(handoffs) + len(pending_proposals),
             completed=len(completed_messages) + len(completed_runs),
+            effective_tasks=len(completed_by_session) + len(completed_runs),
             capability_changes=len(changes),
         ),
         attention_items=attention_items[:8],
         today_items=today_items[:8],
+        recent_items=recent_items[:50],
         completion_trend=[
             AgentOperationsTrendPointRead(date=day, value=value)
             for day, value in completion_days.items()
@@ -293,7 +321,11 @@ def _scheduled_run_item(
         kind="scheduled_run",
         title=task.title if task else "定时任务",
         description=(row.error if status == "执行异常" else row.result_summary)
-        or ("定时任务正在执行" if status == "进行中" else "定时任务执行异常"),
+        or {
+            "进行中": "定时任务正在执行",
+            "已完成": "定时任务已完成",
+            "执行异常": "定时任务执行异常",
+        }.get(status, "定时任务状态已更新"),
         status=status,
         timestamp=_iso_utc(timestamp),
         session_id=row.session_id,

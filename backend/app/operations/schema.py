@@ -18,6 +18,7 @@ class AgentOperationsMetricsRead(BaseModel):
     running: int = 0
     awaiting_confirmation: int = 0
     completed: int = 0
+    effective_tasks: int = 0
     capability_changes: int = 0
 
 
@@ -54,5 +55,6 @@ class AgentOperationsSummaryRead(BaseModel):
     metrics: AgentOperationsMetricsRead
     attention_items: list[AgentOperationsItemRead] = Field(default_factory=list)
     today_items: list[AgentOperationsItemRead] = Field(default_factory=list)
+    recent_items: list[AgentOperationsItemRead] = Field(default_factory=list)
     completion_trend: list[AgentOperationsTrendPointRead] = Field(default_factory=list)
     capability_changes: list[AgentCapabilityChangeRead] = Field(default_factory=list)

@@ -752,10 +752,12 @@ export type AgentOperationsSummaryRead = {
     running: number;
     awaiting_confirmation: number;
     completed: number;
+    effective_tasks: number;
     capability_changes: number;
   };
   attention_items: AgentOperationsItemRead[];
   today_items: AgentOperationsItemRead[];
+  recent_items: AgentOperationsItemRead[];
   completion_trend: Array<{ date: string; value: number }>;
   capability_changes: AgentCapabilityChangeRead[];
 };

@@ -1,18 +1,40 @@
 import {
   ArrowUpRight,
+  BarChart3,
   BookOpen,
   CalendarDays,
   ChevronDown,
   CircleCheck,
-  Clock,
   FileText,
   Layers3,
   ListTodo,
-  Play,
   Sparkles,
   TrendingUp,
+  Workflow,
+  Wrench,
+  Zap,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  LineChart,
+  PieChart,
+  type LineSeriesOption,
+  type PieSeriesOption,
+} from 'echarts/charts';
+import {
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+  type GridComponentOption,
+  type LegendComponentOption,
+  type TitleComponentOption,
+  type TooltipComponentOption,
+} from 'echarts/components';
+import * as echarts from 'echarts/core';
+import type { ComposeOption } from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api, TENANT_ID } from '@/api/client';
@@ -26,11 +48,30 @@ import type {
   AgentOperationsItemRead,
   AgentOperationsSummaryRead,
   AgentProfileRead,
+  CapabilityEvolutionSummaryRead,
 } from '@/types';
 
 type DashboardView = 'overview' | 'today';
 type PeriodKey = '7d' | '30d';
 type Tone = 'neutral' | 'warning' | 'success' | 'violet';
+type DashboardChartOption = ComposeOption<
+  LineSeriesOption
+  | PieSeriesOption
+  | GridComponentOption
+  | LegendComponentOption
+  | TitleComponentOption
+  | TooltipComponentOption
+>;
+
+echarts.use([
+  LineChart,
+  PieChart,
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 type WorkItem = {
   id: string;
@@ -99,7 +140,7 @@ function KpiCard({
   return (
     <article
       className={cn(
-        'flex min-h-[104px] items-center justify-between rounded-[16px] border-[0.5px] px-[20px] py-[18px]',
+        'flex min-h-[92px] items-center justify-between rounded-[16px] border-[0.5px] px-[17px] py-[15px]',
         tone === 'success' && 'border-transparent bg-[#eaf8ef]',
         tone === 'violet' && 'border-transparent bg-[#f4f2ff]',
         tone === 'warning' && 'border-[#f2e4c7] bg-white',
@@ -118,7 +159,7 @@ function KpiCard({
         </p>
         <strong
           className={cn(
-            'mt-[12px] block text-[30px] leading-none font-semibold text-[#18181a]',
+            'mt-[10px] block text-[27px] leading-none font-semibold text-[#18181a]',
             tone === 'success' && 'text-[#20a35a]',
             tone === 'violet' && 'text-[#5d5793]',
           )}
@@ -128,7 +169,7 @@ function KpiCard({
       </div>
       <span
         className={cn(
-          'grid size-[46px] shrink-0 place-items-center rounded-full bg-[#f6f6f6] text-[#18181a]',
+          'grid size-[40px] shrink-0 place-items-center rounded-full bg-[#f6f6f6] text-[#18181a]',
           tone === 'warning' && 'bg-[#fff6e5]',
           tone === 'success' && 'bg-[#d9f2e2] text-[#20a35a]',
           tone === 'violet' && 'bg-[#e7e3fa] text-[#6861a3]',
@@ -179,94 +220,45 @@ function LoadingPage() {
 }
 
 function ReplyTrendChart({ points }: { points: Array<{ label: string; value: number }> }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const option = useMemo<DashboardChartOption>(() => ({
+    animationDuration: 500,
+    grid: { top: 22, right: 12, bottom: 24, left: 30 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#18181a',
+      borderWidth: 0,
+      textStyle: { color: '#ffffff', fontSize: 11 },
+      axisPointer: { type: 'line', lineStyle: { color: '#cfd6d0', type: 'dashed' } },
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: points.map((point) => point.label),
+      axisLine: { lineStyle: { color: '#e6e9ed' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#9298a4', fontSize: 9 },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLabel: { color: '#9298a4', fontSize: 9 },
+      splitLine: { lineStyle: { color: '#eceef1', type: 'dashed' } },
+    },
+    series: [{
+      name: '有效完成',
+      type: 'line',
+      data: points.map((point) => point.value),
+      smooth: 0.32,
+      symbol: 'circle',
+      symbolSize: 6,
+      showSymbol: true,
+      lineStyle: { color: '#22a559', width: 2.5 },
+      itemStyle: { color: '#22a559', borderColor: '#ffffff', borderWidth: 1.5 },
+      areaStyle: { color: 'rgba(34,165,89,0.08)' },
+    }],
+  }), [points]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const draw = () => {
-      const box = canvas.getBoundingClientRect();
-      if (!box.width || !box.height) return;
-      const ratio = window.devicePixelRatio || 1;
-      canvas.width = Math.round(box.width * ratio);
-      canvas.height = Math.round(box.height * ratio);
-      const context = canvas.getContext('2d');
-      if (!context) return;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      context.clearRect(0, 0, box.width, box.height);
-
-      const padding = { top: 28, right: 14, bottom: 34, left: 32 };
-      const chartWidth = Math.max(1, box.width - padding.left - padding.right);
-      const chartHeight = Math.max(1, box.height - padding.top - padding.bottom);
-      const maxValue = Math.max(1, ...points.map((point) => point.value));
-
-      context.font = '10px "Geist Variable", sans-serif';
-      context.textBaseline = 'middle';
-      context.strokeStyle = '#eceef1';
-      context.fillStyle = '#a0a5b1';
-      context.lineWidth = 1;
-      for (let index = 0; index <= 4; index += 1) {
-        const y = padding.top + (chartHeight * index) / 4;
-        context.setLineDash([4, 5]);
-        context.beginPath();
-        context.moveTo(padding.left, y);
-        context.lineTo(padding.left + chartWidth, y);
-        context.stroke();
-        const label = Math.round(maxValue * (1 - index / 4));
-        context.fillText(String(label), 4, y);
-      }
-
-      const xFor = (index: number) => (
-        points.length <= 1
-          ? padding.left + chartWidth / 2
-          : padding.left + (chartWidth * index) / (points.length - 1)
-      );
-      const yFor = (value: number) => padding.top + chartHeight - (value / maxValue) * chartHeight;
-
-      if (points.length > 0) {
-        context.setLineDash([]);
-        context.strokeStyle = '#18181a';
-        context.lineWidth = 2.5;
-        context.beginPath();
-        points.forEach((point, index) => {
-          const x = xFor(index);
-          const y = yFor(point.value);
-          if (index === 0) context.moveTo(x, y);
-          else context.lineTo(x, y);
-        });
-        context.stroke();
-
-        points.forEach((point, index) => {
-          const x = xFor(index);
-          const y = yFor(point.value);
-          context.fillStyle = '#18181a';
-          context.beginPath();
-          context.arc(x, y, 3.5, 0, Math.PI * 2);
-          context.fill();
-          if (points.length <= 8 || index === points.length - 1 || index % 5 === 0) {
-            context.fillStyle = '#858b9c';
-            context.textAlign = 'center';
-            context.fillText(point.label, x, box.height - 12);
-          }
-        });
-      }
-    };
-
-    draw();
-    const observer = new ResizeObserver(draw);
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [points]);
-
-  const summary = points.map((point) => `${point.label} ${point.value}`).join('，');
-  return (
-    <canvas
-      ref={canvasRef}
-      className="h-[300px] w-full"
-      role="img"
-      aria-label={`有效完成趋势：${summary || '暂无数据'}`}
-    />
-  );
+  return <ReactEChartsCore echarts={echarts} option={option} style={{ height: 185, width: '100%' }} notMerge lazyUpdate />;
 }
 
 function WorkList({
@@ -317,6 +309,103 @@ function WorkList({
   );
 }
 
+const OUTPUT_COLORS = ['#22a559', '#5688dc', '#7b68c6', '#e5a233', '#a3a8b2'];
+
+function outputType(title: string): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes('asin') || title.includes('选品')) return '选品报告';
+  if (title.includes('价格') || title.includes('竞品')) return '数据看板';
+  if (normalized.includes('listing') || title.includes('优化')) return '优化建议';
+  if (title.includes('关键词')) return '关键词清单';
+  return '研究报告';
+}
+
+function RecentResultsTable({ items, onOpen }: { items: WorkItem[]; onOpen: (item: WorkItem) => void }) {
+  if (!items.length) return <EmptyPanel>当前周期还没有完成成果</EmptyPanel>;
+  return (
+    <div className="divide-y divide-[#eceef1]">
+      {items.slice(0, 6).map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => onOpen(item)}
+          className="grid w-full grid-cols-[minmax(0,1fr)_72px_86px_72px] items-center gap-[10px] px-[18px] py-[12px] text-left transition-colors hover:bg-[#fafbfc] max-[720px]:grid-cols-[minmax(0,1fr)_auto]"
+        >
+          <span className="flex min-w-0 items-center gap-[10px]">
+            <span className="grid size-[32px] shrink-0 place-items-center rounded-[9px] bg-[#edf8f0] text-[#249358]">
+              <FileText className="size-[15px]" />
+            </span>
+            <span className="min-w-0">
+              <strong className="block truncate text-[11px] font-medium text-[#18181a]">{item.title}</strong>
+              <span className="mt-[2px] block truncate text-[9px] text-[#a0a5b1]">{item.description}</span>
+            </span>
+          </span>
+          <span className="text-[10px] text-[#858b9c] max-[720px]:hidden">{formatShortDate(item.timestamp)}</span>
+          <span className="text-[10px] text-[#646a78] max-[720px]:hidden">{outputType(item.title)}</span>
+          <span className="flex items-center justify-end gap-[5px] text-[10px] text-[#249358]">
+            <CircleCheck className="size-[13px]" /> 完成
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WorkComposition({ items }: { items: WorkItem[] }) {
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    items.forEach((item) => counts.set(outputType(item.title), (counts.get(outputType(item.title)) || 0) + 1));
+    return [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  }, [items]);
+  const total = groups.reduce((sum, [, count]) => sum + count, 0);
+  const option = useMemo<DashboardChartOption>(() => ({
+    animationDuration: 500,
+    color: OUTPUT_COLORS,
+    title: {
+      text: String(total),
+      subtext: '成果',
+      left: '27%',
+      top: '33%',
+      textAlign: 'center',
+      textStyle: { color: '#18181a', fontSize: 21, fontWeight: 600 },
+      subtextStyle: { color: '#9298a4', fontSize: 9, lineHeight: 16 },
+    },
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: '#18181a',
+      borderWidth: 0,
+      textStyle: { color: '#ffffff', fontSize: 10 },
+      formatter: '{b}：{c}',
+    },
+    legend: {
+      orient: 'vertical',
+      right: 4,
+      top: 'middle',
+      itemWidth: 7,
+      itemHeight: 7,
+      itemGap: 8,
+      textStyle: { color: '#646a78', fontSize: 9 },
+      formatter: (name: string) => {
+        const count = groups.find(([label]) => label === name)?.[1] || 0;
+        return `${name}  ${count}`;
+      },
+    },
+    series: [{
+      type: 'pie',
+      radius: ['48%', '68%'],
+      center: ['28%', '50%'],
+      avoidLabelOverlap: true,
+      label: { show: false },
+      labelLine: { show: false },
+      itemStyle: { borderColor: '#ffffff', borderWidth: 2 },
+      emphasis: { scaleSize: 4 },
+      data: groups.slice(0, 5).map(([name, value]) => ({ name, value })),
+    }],
+  }), [groups, total]);
+
+  return <ReactEChartsCore echarts={echarts} option={option} style={{ height: 132, width: '100%' }} notMerge lazyUpdate />;
+}
+
 export default function OperationsDashboardPage({
   view,
   agent,
@@ -331,12 +420,14 @@ export default function OperationsDashboardPage({
   const navigate = useNavigate();
   const [period, setPeriod] = useState<PeriodKey>('7d');
   const [data, setData] = useState<AgentOperationsSummaryRead | null>(null);
+  const [evolution, setEvolution] = useState<CapabilityEvolutionSummaryRead | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     if (!agent?.id) {
       setData(null);
+      setEvolution(null);
       setLoading(false);
       return () => { cancelled = true; };
     }
@@ -344,15 +435,24 @@ export default function OperationsDashboardPage({
     setLoading(true);
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
     const periodDays = period === '7d' ? 7 : 30;
-    api.get<AgentOperationsSummaryRead>(
-      `/api/enterprise/agents/${encodeURIComponent(agent.id)}/operations-summary?tenant_id=${TENANT_ID}&period_days=${periodDays}&timezone=${encodeURIComponent(timezone)}`,
-    )
-      .then((result) => {
-        if (!cancelled) setData(result);
+    Promise.all([
+      api.get<AgentOperationsSummaryRead>(
+        `/api/enterprise/agents/${encodeURIComponent(agent.id)}/operations-summary?tenant_id=${TENANT_ID}&period_days=${periodDays}&timezone=${encodeURIComponent(timezone)}`,
+      ),
+      api.get<CapabilityEvolutionSummaryRead>(
+        `/api/enterprise/agents/${encodeURIComponent(agent.id)}/evolution-summary?tenant_id=${TENANT_ID}&period_days=${periodDays}`,
+      ),
+    ])
+      .then(([operationsResult, evolutionResult]) => {
+        if (!cancelled) {
+          setData(operationsResult);
+          setEvolution(evolutionResult);
+        }
       })
       .catch((error) => {
         if (cancelled) return;
         setData(null);
+        setEvolution(null);
         notify.error(error instanceof Error ? error.message : '加载经营数据失败');
       })
       .finally(() => {
@@ -362,13 +462,13 @@ export default function OperationsDashboardPage({
     return () => { cancelled = true; };
   }, [agent?.id, period]);
 
-  const overviewItems = useMemo(
-    () => (data?.attention_items || []).map(toWorkItem),
-    [data?.attention_items],
-  );
   const todayItems = useMemo(
     () => (data?.today_items || []).map(toWorkItem),
     [data?.today_items],
+  );
+  const recentItems = useMemo(
+    () => (data?.recent_items || []).map(toWorkItem),
+    [data?.recent_items],
   );
   const pendingConfirmations = useMemo(
     () => (data?.attention_items || []).filter((item) => item.status === '待确认'),
@@ -400,11 +500,14 @@ export default function OperationsDashboardPage({
 
   const agentName = employeeDisplayName(agent);
   const metricValues = {
-    running: data?.metrics.running || 0,
-    waiting: data?.metrics.awaiting_confirmation || 0,
     completed: data?.metrics.completed || 0,
+    effectiveTasks: data?.metrics.effective_tasks || 0,
+    skillWork: evolution?.skill_work || 0,
     capabilityChanges: data?.metrics.capability_changes || 0,
+    reuse: evolution?.reuse_count || 0,
   };
+  const activeSkills = (evolution?.skills || []).filter((skill) => skill.work_count > 0);
+  const sopCount = agent.resources.filter((resource) => resource.status === 'active' && resource.resource_type === 'skill').length;
 
   return (
     <main className="mx-auto min-h-full w-full max-w-[1220px] px-[24px] pt-[18px] pb-[40px] max-[900px]:px-0">
@@ -418,11 +521,11 @@ export default function OperationsDashboardPage({
               <h1 className="text-[26px] leading-[34px] font-semibold tracking-[-0.02em] text-[#18181a]">
                 {view === 'overview' ? '经营总览' : '早上好，老板'}
               </h1>
-              <p className="mt-[5px] text-[12px] leading-[18px] text-[#858b9c]">
-                {view === 'overview'
-                  ? `查看 ${agentName} 的工作进展、待确认结果与能力沉淀`
-                  : `${agentName} 今天有 ${todayItems.length} 项工作，${pendingConfirmations.length} 项需要你确认`}
-              </p>
+              {view === 'today' && (
+                <p className="mt-[5px] text-[12px] leading-[18px] text-[#858b9c]">
+                  {agentName} 今天有 {todayItems.length} 项工作，{pendingConfirmations.length} 项需要你确认
+                </p>
+              )}
             </div>
             {view === 'overview' ? (
               <label className="relative shrink-0">
@@ -450,59 +553,64 @@ export default function OperationsDashboardPage({
 
       {view === 'overview' ? (
         <>
-          <section className="grid grid-cols-4 gap-[16px] max-[980px]:grid-cols-2 max-[560px]:grid-cols-1" aria-label="经营指标">
-            <KpiCard label="进行中" value={metricValues.running} tone="neutral" icon={<Play className="size-[20px]" />} />
-            <KpiCard label="待确认" value={metricValues.waiting} tone="warning" icon={<Clock className="size-[20px]" />} />
-            <KpiCard label={period === '7d' ? '本周完成' : '近 30 天完成'} value={metricValues.completed} tone="success" icon={<CircleCheck className="size-[20px]" />} />
-            <KpiCard label={period === '7d' ? '本周沉淀' : '近 30 天沉淀'} value={metricValues.capabilityChanges} tone="violet" icon={<Layers3 className="size-[20px]" />} />
+          <section className="grid grid-cols-5 gap-[12px] max-[1080px]:grid-cols-3 max-[760px]:grid-cols-2 max-[480px]:grid-cols-1" aria-label="经营指标">
+            <KpiCard label={period === '7d' ? '本周完成' : '近 30 天完成'} value={metricValues.completed} tone="success" icon={<CircleCheck className="size-[18px]" />} />
+            <KpiCard label="有效任务" value={metricValues.effectiveTasks} tone="neutral" icon={<ListTodo className="size-[18px]" />} />
+            <KpiCard label="专业能力调用" value={metricValues.skillWork} tone="neutral" icon={<Zap className="size-[18px]" />} />
+            <KpiCard label="已沉淀" value={metricValues.capabilityChanges} tone="violet" icon={<Layers3 className="size-[18px]" />} />
+            <KpiCard label="后续复用" value={metricValues.reuse} tone="neutral" icon={<TrendingUp className="size-[18px]" />} />
           </section>
 
-          <section className="mt-[16px] grid grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)] gap-[16px] max-[980px]:grid-cols-1">
+          <section className="mt-[14px] grid grid-cols-[minmax(0,1.55fr)_minmax(300px,0.9fr)] gap-[14px] max-[980px]:grid-cols-1">
             <article className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
-              <header className="flex h-[60px] items-center justify-between border-b border-[#eceef1] px-[20px]">
-                <h2 className="text-[16px] font-semibold text-[#18181a]">需要关注</h2>
-                <span className="text-[10px] text-[#858b9c]">全部 {overviewItems.length}</span>
+              <header className="flex h-[54px] items-center justify-between border-b border-[#eceef1] px-[18px]">
+                <h2 className="text-[15px] font-semibold text-[#18181a]">最近成果</h2>
+                <button type="button" onClick={() => navigate(EnterpriseRoute.Today)} className="flex items-center gap-[4px] text-[10px] text-[#858b9c] hover:text-[#18181a]">
+                  查看全部 <ArrowUpRight className="size-[12px]" />
+                </button>
               </header>
-              <WorkList items={overviewItems} onOpen={openWorkItem} />
+              <div className="grid grid-cols-[minmax(0,1fr)_72px_86px_72px] gap-[10px] border-b border-[#eceef1] px-[18px] py-[8px] text-[9px] text-[#a0a5b1] max-[720px]:hidden">
+                <span>工作名称</span><span>日期</span><span>产出类型</span><span className="text-right">状态</span>
+              </div>
+              <RecentResultsTable items={recentItems} onOpen={openWorkItem} />
             </article>
 
-            <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[20px] pt-[19px] pb-[12px]">
-              <header className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-[16px] font-semibold text-[#18181a]">有效完成趋势</h2>
-                  <p className="mt-[4px] text-[10px] text-[#a0a5b1]">按成功对话轮次与定时任务运行统计</p>
-                </div>
-                <TrendingUp className="size-[18px] text-[#858b9c]" />
-              </header>
-              <ReplyTrendChart points={trendPoints} />
-            </article>
+            <div className="grid gap-[14px]">
+              <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] pt-[16px] pb-[8px]">
+                <header className="flex items-center justify-between">
+                  <h2 className="text-[15px] font-semibold text-[#18181a]">有效完成趋势</h2>
+                  <TrendingUp className="size-[17px] text-[#858b9c]" />
+                </header>
+                <ReplyTrendChart points={trendPoints} />
+              </article>
+              <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] py-[16px]">
+                <header className="mb-[8px] flex items-center justify-between">
+                  <h2 className="text-[15px] font-semibold text-[#18181a]">工作成果构成</h2>
+                  <BarChart3 className="size-[17px] text-[#858b9c]" />
+                </header>
+                <WorkComposition items={recentItems} />
+              </article>
+            </div>
           </section>
 
-          <section className="mt-[16px] flex min-h-[108px] items-center gap-[18px] rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[20px] py-[16px] max-[760px]:flex-wrap">
-            <span className="grid size-[48px] shrink-0 place-items-center rounded-full bg-[#f4f2ff] text-[#6861a3]">
-              <Sparkles className="size-[21px]" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-[15px] font-semibold text-[#18181a]">最近沉淀</h2>
-              {latestCapabilityChange ? (
-                <p className="mt-[5px] truncate text-[11px] text-[#858b9c]">
-                  {latestCapabilityChange.instruction || latestCapabilityChange.label} · {formatShortDate(latestCapabilityChange.timestamp)}
-                </p>
-              ) : (
-                <p className="mt-[5px] text-[11px] text-[#a0a5b1]">当前周期还没有经审核写入的经验</p>
-              )}
-            </div>
-            <div className="min-w-[160px] border-l border-[#eceef1] pl-[24px] max-[760px]:border-l-0 max-[760px]:pl-0">
-              <p className="text-[10px] text-[#858b9c]">当前周期</p>
-              <p className="mt-[5px] text-[12px] text-[#18181a]">共 {capabilityChanges.length} 项，复用 {capabilityChanges.reduce((sum, item) => sum + item.reuse_count, 0)} 次</p>
-            </div>
-            <button
-              type="button"
-              disabled={!latestCapabilityChange}
-              onClick={() => latestCapabilityChange && navigate(EnterpriseRoute.Evolution)}
-              className="h-[40px] rounded-[10px] border-[0.5px] border-[#d9dce3] bg-white px-[18px] text-[11px] text-[#18181a] transition-colors hover:bg-[#f6f6f6] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              查看沉淀
+          <section className="mt-[14px] grid grid-cols-4 gap-[12px] max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
+            <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[16px]">
+              <div className="flex items-center justify-between"><h2 className="text-[13px] font-semibold text-[#18181a]">能力调用</h2><Zap className="size-[16px] text-[#249358]" /></div>
+              <strong className="mt-[13px] block text-[22px] font-semibold text-[#249358]">{activeSkills.length} 项技能</strong>
+              <div className="mt-[10px] space-y-[6px]">{activeSkills.slice(0, 3).map((skill) => <p key={skill.skill_id} className="truncate text-[10px] text-[#646a78]">• {skill.label} <span className="float-right text-[#a0a5b1]">{skill.work_count} 次</span></p>)}</div>
+            </article>
+            <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[16px]">
+              <div className="flex items-center justify-between"><h2 className="text-[13px] font-semibold text-[#18181a]">SOP 使用</h2><Workflow className="size-[16px] text-[#6861a3]" /></div>
+              <strong className="mt-[13px] block text-[22px] font-semibold text-[#18181a]">{sopCount} 个 SOP</strong>
+            </article>
+            <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[16px]">
+              <div className="flex items-center justify-between"><h2 className="text-[13px] font-semibold text-[#18181a]">工具验证研究</h2><Wrench className="size-[16px] text-[#249358]" /></div>
+              <strong className="mt-[13px] block text-[22px] font-semibold text-[#249358]">{metricValues.skillWork} 项研究</strong>
+            </article>
+            <button type="button" disabled={!latestCapabilityChange} onClick={() => latestCapabilityChange && navigate(EnterpriseRoute.Evolution)} className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[16px] text-left transition-colors hover:border-[#cec8ef] disabled:cursor-default">
+              <div className="flex items-center justify-between"><h2 className="text-[13px] font-semibold text-[#18181a]">学习沉淀</h2><Sparkles className="size-[16px] text-[#6861a3]" /></div>
+              <strong className="mt-[13px] block text-[22px] font-semibold text-[#6861a3]">{capabilityChanges.length} 条规则</strong>
+              <p className="mt-[10px] line-clamp-2 text-[10px] leading-[16px] text-[#646a78]">{latestCapabilityChange?.instruction || '尚未形成新经验'}</p>
             </button>
           </section>
         </>
