@@ -1,14 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
+  BarChart3,
+  BrainCircuit,
   Check,
   ChevronDown,
   CircleCheckBig,
   History,
   Lightbulb,
+  Repeat2,
   RefreshCw,
+  SearchCheck,
   Sparkles,
   X,
 } from 'lucide-react';
+import {
+  BarChart,
+  FunnelChart,
+  type BarSeriesOption,
+  type FunnelSeriesOption,
+} from 'echarts/charts';
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  type GridComponentOption,
+  type LegendComponentOption,
+  type TooltipComponentOption,
+} from 'echarts/components';
+import * as echarts from 'echarts/core';
+import type { ComposeOption } from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
 
 import { api, TENANT_ID } from '@/api/client';
 import AppHeader from '@/components/AppHeader';
@@ -21,6 +43,23 @@ import type {
   CapabilityEvolutionSummaryRead,
 } from '@/types';
 import { employeeDisplayName } from '@/employee';
+
+type EvolutionChartOption = ComposeOption<
+  BarSeriesOption
+  | FunnelSeriesOption
+  | GridComponentOption
+  | LegendComponentOption
+  | TooltipComponentOption
+>;
+
+echarts.use([
+  BarChart,
+  FunnelChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 
 function formatTime(value?: string | null): string {
@@ -55,6 +94,98 @@ function LoadingPage() {
       <RefreshCw className="size-[20px] animate-spin" />
     </div>
   );
+}
+
+function EvolutionMetric({
+  label,
+  value,
+  tone = 'neutral',
+  icon,
+}: {
+  label: string;
+  value: number;
+  tone?: 'neutral' | 'success' | 'violet';
+  icon: ReactNode;
+}) {
+  return (
+    <article className={cn(
+      'flex min-h-[92px] items-center justify-between rounded-[16px] border-[0.5px] px-[17px] py-[15px]',
+      tone === 'neutral' && 'border-[#e3e7f1] bg-white',
+      tone === 'success' && 'border-transparent bg-[#eaf8ef]',
+      tone === 'violet' && 'border-transparent bg-[#f4f2ff]',
+    )}>
+      <div><p className={cn('text-[12px] text-[#858b9c]', tone === 'success' && 'text-[#27965b]', tone === 'violet' && 'text-[#6f68a8]')}>{label}</p><strong className={cn('mt-[9px] block text-[27px] leading-none font-semibold text-[#18181a]', tone === 'success' && 'text-[#20a35a]', tone === 'violet' && 'text-[#5d5793]')}>{value}</strong></div>
+      <span className={cn('grid size-[40px] place-items-center rounded-full bg-[#f6f6f6] text-[#18181a]', tone === 'success' && 'bg-[#d9f2e2] text-[#20a35a]', tone === 'violet' && 'bg-[#e7e3fa] text-[#6861a3]')}>{icon}</span>
+    </article>
+  );
+}
+
+function EvolutionFunnelChart({ summary }: { summary: CapabilityEvolutionSummaryRead | null }) {
+  const total = (summary?.completed_work || 0) + (summary?.skill_work || 0) + (summary?.learned_count || 0) + (summary?.reuse_count || 0);
+  const option = useMemo<EvolutionChartOption>(() => ({
+    animationDuration: 500,
+    color: ['#22a559', '#5d8fdf', '#7b68c6', '#c5cad3'],
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: '#18181a',
+      borderWidth: 0,
+      textStyle: { color: '#ffffff', fontSize: 10 },
+      formatter: '{b}：{c}',
+    },
+    series: [{
+      type: 'funnel',
+      left: '5%',
+      top: 8,
+      bottom: 8,
+      width: '90%',
+      minSize: '28%',
+      maxSize: '100%',
+      sort: 'descending',
+      gap: 4,
+      label: { show: true, position: 'inside', color: '#ffffff', fontSize: 10, formatter: '{b}  {c}' },
+      labelLine: { show: false },
+      itemStyle: { borderColor: '#ffffff', borderWidth: 2, borderRadius: 5 },
+      emphasis: { label: { fontSize: 11 } },
+      data: [
+        { name: '完成工作', value: summary?.completed_work || 0 },
+        { name: '能力验证', value: summary?.skill_work || 0 },
+        { name: '形成做法', value: summary?.learned_count || 0 },
+        { name: '后续复用', value: summary?.reuse_count || 0 },
+      ],
+    }],
+  }), [summary]);
+
+  return total
+    ? <ReactEChartsCore echarts={echarts} option={option} style={{ height: 190, width: '100%' }} notMerge lazyUpdate />
+    : <div className="grid h-[190px] place-items-center text-[11px] text-[#9298a4]">暂时没有进化记录</div>;
+}
+
+function SkillProgressChart({ summary }: { summary: CapabilityEvolutionSummaryRead | null }) {
+  const skills = (summary?.skills || []).slice(0, 5);
+  const option = useMemo<EvolutionChartOption>(() => ({
+    animationDuration: 500,
+    color: ['#22a559', '#7b68c6', '#c5cad3'],
+    grid: { top: 10, right: 12, bottom: 20, left: 92 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: '#18181a',
+      borderWidth: 0,
+      textStyle: { color: '#ffffff', fontSize: 10 },
+    },
+    legend: { bottom: 0, itemWidth: 7, itemHeight: 7, textStyle: { color: '#858b9c', fontSize: 9 } },
+    xAxis: { type: 'value', minInterval: 1, axisLabel: { color: '#9298a4', fontSize: 9 }, splitLine: { lineStyle: { color: '#eceef1', type: 'dashed' } } },
+    yAxis: { type: 'category', data: skills.map((skill) => skill.label), axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: '#646a78', fontSize: 9, width: 80, overflow: 'truncate' } },
+    series: [
+      { name: '验证', type: 'bar', stack: 'total', barWidth: 12, data: skills.map((skill) => skill.verified_count), itemStyle: { borderRadius: [4, 0, 0, 4] } },
+      { name: '学会', type: 'bar', stack: 'total', barWidth: 12, data: skills.map((skill) => skill.learned_count) },
+      { name: '复用', type: 'bar', stack: 'total', barWidth: 12, data: skills.map((skill) => skill.reuse_count), itemStyle: { borderRadius: [0, 4, 4, 0] } },
+    ],
+  }), [skills]);
+
+  return skills.length
+    ? <ReactEChartsCore echarts={echarts} option={option} style={{ height: 190, width: '100%' }} notMerge lazyUpdate />
+    : <div className="grid h-[190px] place-items-center text-[11px] text-[#9298a4]">暂时没有能力使用记录</div>;
 }
 
 function ProposalCard({
@@ -228,14 +359,17 @@ export default function CapabilityEvolutionPage({
   if (!agent) return <main className="p-[24px]"><EmptyState>请选择一名数字员工</EmptyState></main>;
 
   return (
-    <main className="mx-auto min-h-full w-full max-w-[1120px] px-[24px] pt-[18px] pb-[40px] max-[900px]:px-0">
+    <main className="mx-auto min-h-full w-full max-w-[1220px] px-[24px] pt-[18px] pb-[40px] max-[900px]:px-0">
       <AppHeader
         onLogout={onLogout}
         userName={currentUser?.username}
         className="mb-[20px]"
         left={(
           <div className="flex min-h-[40px] items-center justify-between gap-[18px] pr-[10px] max-[700px]:flex-col max-[700px]:items-start">
-            <h1 className="text-[26px] leading-[34px] font-semibold tracking-[-0.02em] text-[#18181a]">QQQ 学会了什么</h1>
+            <div>
+              <h1 className="text-[26px] leading-[34px] font-semibold tracking-[-0.02em] text-[#18181a]">能力进化</h1>
+              <p className="mt-[4px] text-[11px] text-[#9298a4]">{employeeDisplayName(agent)} 近 30 天的能力验证、沉淀与复用</p>
+            </div>
             <button
               type="button"
               disabled={learning}
@@ -249,110 +383,71 @@ export default function CapabilityEvolutionPage({
         )}
       />
 
-      <section className="rounded-[18px] border-[0.5px] border-[#dfe6df] bg-[linear-gradient(112deg,#f5faf6_0%,#ffffff_62%)] px-[22px] py-[20px]">
-        <div className="flex items-start justify-between gap-[18px] max-[680px]:flex-col">
-          <div className="max-w-[680px]">
-            <span className="text-[10px] font-medium text-[#3d854d]">近 30 天</span>
-            <h2 className="mt-[5px] text-[17px] font-semibold leading-[26px] text-[#1d2c20]">
-              {employeeDisplayName(agent)} 完成了 {summary?.completed_work || 0} 项工作，已经学会 {summary?.learned_count || 0} 条可复用做法。
-            </h2>
-          </div>
-          <div className="grid shrink-0 grid-cols-3 divide-x divide-[#dde7df] rounded-[13px] border border-[#e1e9e3] bg-white px-[8px] py-[10px] shadow-[0_5px_16px_rgba(34,69,42,0.04)]">
-            {[
-              ['完成', summary?.completed_work || 0],
-              ['学会', summary?.learned_count || 0],
-              ['复用', summary?.reuse_count || 0],
-            ].map(([label, value]) => (
-              <div key={label} className="min-w-[66px] px-[12px] text-center">
-                <p className="text-[20px] font-semibold leading-none text-[#249358]">{value}</p>
-                <p className="mt-[5px] text-[9px] text-[#8b928d]">{label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+      <section className="grid grid-cols-4 gap-[12px] max-[900px]:grid-cols-2 max-[480px]:grid-cols-1" aria-label="能力进化指标">
+        <EvolutionMetric label="完成工作" value={summary?.completed_work || 0} tone="success" icon={<CircleCheckBig className="size-[18px]" />} />
+        <EvolutionMetric label="能力验证" value={summary?.skill_work || 0} icon={<SearchCheck className="size-[18px]" />} />
+        <EvolutionMetric label="已经学会" value={summary?.learned_count || 0} tone="violet" icon={<BrainCircuit className="size-[18px]" />} />
+        <EvolutionMetric label="后续复用" value={summary?.reuse_count || 0} icon={<Repeat2 className="size-[18px]" />} />
       </section>
 
-      <section className="mt-[18px]">
-        <div className="mb-[9px] flex items-end justify-between gap-[12px]">
-          <h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2>
-          <span className="text-[10px] text-[#858b9c]">{pending.length} 条</span>
-        </div>
+      <section className="mt-[14px] grid grid-cols-2 gap-[14px] max-[900px]:grid-cols-1">
+        <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] pt-[16px] pb-[8px]">
+          <header className="flex items-start justify-between">
+            <div><h2 className="text-[15px] font-semibold text-[#18181a]">进化路径</h2><p className="mt-[2px] text-[9px] text-[#a0a5b1]">从真实工作到后续复用</p></div>
+            <Sparkles className="size-[17px] text-[#6861a3]" />
+          </header>
+          <EvolutionFunnelChart summary={summary} />
+        </article>
+        <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] pt-[16px] pb-[8px]">
+          <header className="flex items-start justify-between">
+            <div><h2 className="text-[15px] font-semibold text-[#18181a]">能力使用情况</h2><p className="mt-[2px] text-[9px] text-[#a0a5b1]">各项能力的验证、学会与复用次数</p></div>
+            <BarChart3 className="size-[17px] text-[#249358]" />
+          </header>
+          <SkillProgressChart summary={summary} />
+        </article>
+      </section>
+
+      <section className="mt-[14px]">
+        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2><span className="text-[10px] text-[#858b9c]">{pending.length} 条</span></div>
         <div className="space-y-[10px]">
-          {pending.length ? pending.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              busy={busyId === proposal.id}
-              onApply={() => void act(proposal, 'apply')}
-              onReject={() => void act(proposal, 'reject')}
-            />
-          )) : (
-            <div className="flex items-center gap-[9px] rounded-[13px] border border-[#e4e9e5] bg-white px-[15px] py-[12px] text-[11px] text-[#69716b]">
-              <CircleCheckBig className="size-[15px] text-[#319447]" /> 目前没有需要确认的新做法
-            </div>
+          {pending.length ? pending.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} busy={busyId === proposal.id} onApply={() => void act(proposal, 'apply')} onReject={() => void act(proposal, 'reject')} />) : (
+            <div className="flex items-center gap-[9px] rounded-[13px] border border-[#e4e9e5] bg-white px-[15px] py-[12px] text-[11px] text-[#69716b]"><CircleCheckBig className="size-[15px] text-[#319447]" />目前没有需要确认的新做法</div>
           )}
         </div>
       </section>
 
-      <section className="mt-[22px]">
-        <h2 className="mb-[9px] text-[15px] font-semibold text-[#18181a]">成长记录</h2>
-        {applied.length ? (
-          <div className="space-y-[10px]">
-            {applied.map((proposal) => (
-              <article key={proposal.id} className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e0e8e2] bg-white">
-                <div className="flex items-start gap-[13px] px-[18px] py-[16px]">
-                  <span className="grid size-[34px] shrink-0 place-items-center rounded-full bg-[#edf8ef] text-[#319447]">
-                    <CircleCheckBig className="size-[17px]" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] font-medium leading-[20px] text-[#18181a]">{proposal.instruction}</p>
-                    <div className="mt-[6px] flex flex-wrap gap-x-[14px] gap-y-[4px] text-[10px] text-[#858b9c]">
-                      <span>用于 {proposal.target_label}</span>
-                      <span>{formatTime(proposal.applied_at)} 学会</span>
-                      <span className="flex items-center gap-[4px]"><History className="size-[12px]" />后来用过 {proposal.reuse_count} 次</span>
-                    </div>
-                    <button
-                      type="button"
-                      aria-expanded={evidenceId === proposal.id}
-                      onClick={() => setEvidenceId(evidenceId === proposal.id ? '' : proposal.id)}
-                      className="mt-[10px] flex items-center gap-[4px] text-[10px] font-medium text-[#3d854d]"
-                    >
-                      {evidenceId === proposal.id ? '收起依据' : '查看为什么学会'}
-                      <ChevronDown className={cn('size-[12px] transition-transform', evidenceId === proposal.id && 'rotate-180')} />
-                    </button>
-                  </div>
-                </div>
-                {evidenceId === proposal.id && (
-                  <div className="border-t border-[#edf0ed] bg-[#fafbfa] px-[18px] py-[14px]">
-                    <p className="text-[10px] leading-[17px] text-[#646a78]">这条做法来自以下经过工具验证的真实工作：</p>
-                    <div className="mt-[8px] grid grid-cols-2 gap-[7px] max-[680px]:grid-cols-1">
-                      {(summary?.recent_activity || []).filter((item) => item.skill_label === proposal.target_label).map((item) => (
-                        <div key={item.session_id} className="rounded-[9px] border border-[#e7eae7] bg-white px-[10px] py-[8px]">
-                          <p className="truncate text-[10px] font-medium text-[#35363b]">{item.title}</p>
-                          <p className="mt-[2px] text-[9px] text-[#969ba6]">{formatDay(item.occurred_at)}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
-        ) : <EmptyState>你同意的学习建议会出现在这里；以后真正用到时，还会累计次数。</EmptyState>}
+      <section className="mt-[14px] grid grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] gap-[14px] max-[900px]:grid-cols-1">
+        <article className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
+          <header className="flex h-[52px] items-center justify-between border-b border-[#eceef1] px-[18px]"><h2 className="text-[15px] font-semibold text-[#18181a]">已经学会</h2><span className="text-[10px] text-[#858b9c]">{applied.length} 条做法</span></header>
+          {applied.length ? <div className="divide-y divide-[#edf0ed]">{applied.map((proposal) => (
+            <div key={proposal.id}>
+              <div className="flex items-start gap-[13px] px-[18px] py-[15px]">
+                <span className="grid size-[34px] shrink-0 place-items-center rounded-full bg-[#edf8ef] text-[#319447]"><CircleCheckBig className="size-[17px]" /></span>
+                <div className="min-w-0 flex-1"><p className="text-[12px] font-medium leading-[20px] text-[#18181a]">{proposal.instruction}</p><div className="mt-[6px] flex flex-wrap gap-x-[14px] gap-y-[4px] text-[10px] text-[#858b9c]"><span>用于 {proposal.target_label}</span><span>{formatTime(proposal.applied_at)} 学会</span><span className="flex items-center gap-[4px]"><History className="size-[12px]" />复用 {proposal.reuse_count} 次</span></div><button type="button" aria-expanded={evidenceId === proposal.id} onClick={() => setEvidenceId(evidenceId === proposal.id ? '' : proposal.id)} className="mt-[9px] flex items-center gap-[4px] text-[10px] font-medium text-[#3d854d]">{evidenceId === proposal.id ? '收起依据' : '查看学习依据'}<ChevronDown className={cn('size-[12px] transition-transform', evidenceId === proposal.id && 'rotate-180')} /></button></div>
+              </div>
+              {evidenceId === proposal.id && <div className="border-t border-[#edf0ed] bg-[#fafbfa] px-[18px] py-[13px]"><p className="text-[10px] leading-[17px] text-[#646a78]">这条做法来自经过工具验证的真实工作：</p><div className="mt-[8px] grid grid-cols-2 gap-[7px] max-[680px]:grid-cols-1">{(summary?.recent_activity || []).filter((item) => item.skill_label === proposal.target_label).map((item) => <div key={item.session_id} className="rounded-[9px] border border-[#e7eae7] bg-white px-[10px] py-[8px]"><p className="truncate text-[10px] font-medium text-[#35363b]">{item.title}</p><p className="mt-[2px] text-[9px] text-[#969ba6]">{formatDay(item.occurred_at)}</p></div>)}</div></div>}
+            </div>
+          ))}</div> : <div className="p-[14px]"><EmptyState>确认后的学习建议会出现在这里。</EmptyState></div>}
+        </article>
+
+        <article className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
+          <header className="flex h-[52px] items-center justify-between border-b border-[#eceef1] px-[16px]"><h2 className="text-[15px] font-semibold text-[#18181a]">最近能力实践</h2><SearchCheck className="size-[16px] text-[#249358]" /></header>
+          {(summary?.recent_activity || []).length ? <div className="divide-y divide-[#eceef1]">{(summary?.recent_activity || []).slice(0, 6).map((item) => <div key={`${item.session_id}-${item.occurred_at}`} className="px-[16px] py-[11px]"><p className="truncate text-[11px] font-medium text-[#35363b]">{item.title}</p><div className="mt-[4px] flex items-center justify-between gap-[8px] text-[9px] text-[#9298a4]"><span className="truncate">{item.skill_label}</span><span className="shrink-0">{formatDay(item.occurred_at)}</span></div></div>)}</div> : <div className="grid min-h-[150px] place-items-center px-[16px] text-[11px] text-[#9298a4]">暂无能力实践记录</div>}
+        </article>
       </section>
 
-      <section className="mt-[18px] border-t border-[#e8e9ec] pt-[16px]">
+      <section className="mt-[14px] rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[16px] py-[14px]">
         <button
           type="button"
           aria-expanded={showAllSkills}
           onClick={() => setShowAllSkills(!showAllSkills)}
-          className="flex items-center gap-[5px] text-[11px] text-[#646a78] hover:text-[#18181a]"
+          className="flex w-full items-center justify-between gap-[5px] text-[11px] font-medium text-[#35363b] hover:text-[#18181a]"
         >
           {showAllSkills ? '收起全部能力' : `查看全部能力（${summary?.skills.length || 0}）`}
           <ChevronDown className={cn('size-[13px] transition-transform', showAllSkills && 'rotate-180')} />
         </button>
         {showAllSkills && (
-          <div className="mt-[10px] grid grid-cols-3 gap-[8px] max-[760px]:grid-cols-1">
+          <div className="mt-[12px] grid grid-cols-3 gap-[8px] border-t border-[#eceef1] pt-[12px] max-[760px]:grid-cols-1">
             {(summary?.skills || []).map((skill) => (
               <div key={skill.skill_id} className="rounded-[12px] border border-[#e7e9ed] bg-white px-[13px] py-[11px]">
                 <p className="truncate text-[10px] font-medium text-[#35363b]">{skill.label}</p>

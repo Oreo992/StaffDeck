@@ -508,6 +508,8 @@ export default function OperationsDashboardPage({
   };
   const activeSkills = (evolution?.skills || []).filter((skill) => skill.work_count > 0);
   const sopCount = agent.resources.filter((resource) => resource.status === 'active' && resource.resource_type === 'skill').length;
+  const todayCompleted = todayItems.filter((item) => item.tone === 'success').length;
+  const todayActive = todayItems.filter((item) => item.tone !== 'success');
 
   return (
     <main className="mx-auto min-h-full w-full max-w-[1220px] px-[24px] pt-[18px] pb-[40px] max-[900px]:px-0">
@@ -615,61 +617,73 @@ export default function OperationsDashboardPage({
           </section>
         </>
       ) : (
-        <div className="space-y-[18px]">
-          <section className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
-            <header className="flex h-[60px] items-center justify-between border-b border-[#eceef1] px-[20px]">
-              <div className="flex items-center gap-[10px]">
-                <span className="grid size-[32px] place-items-center rounded-full bg-[#f6f6f6] text-[#858b9c]"><ListTodo className="size-[16px]" /></span>
-                <h2 className="text-[16px] font-semibold text-[#18181a]">正在做</h2>
-              </div>
-              <button type="button" onClick={() => navigate(EnterpriseRoute.Operations)} className="h-[32px] rounded-[9px] bg-[#f6f6f6] px-[14px] text-[10px] text-[#858b9c] hover:text-[#18181a]">
-                查看全部工作
-              </button>
-            </header>
-            <WorkList items={todayItems} onOpen={openWorkItem} />
+        <>
+          <section className="grid grid-cols-4 gap-[12px] max-[900px]:grid-cols-2 max-[480px]:grid-cols-1" aria-label="今日工作指标">
+            <KpiCard label="今日任务" value={todayItems.length} tone="success" icon={<ListTodo className="size-[18px]" />} />
+            <KpiCard label="正在进行" value={todayActive.length} tone="neutral" icon={<Zap className="size-[18px]" />} />
+            <KpiCard label="等待确认" value={pendingConfirmations.length} tone={pendingConfirmations.length ? 'warning' : 'neutral'} icon={<FileText className="size-[18px]" />} />
+            <KpiCard label="本周沉淀" value={capabilityChanges.length} tone="violet" icon={<BookOpen className="size-[18px]" />} />
           </section>
 
-          <section>
-            <h2 className="mb-[10px] text-[16px] font-semibold text-[#18181a]">等你确认</h2>
-            {pendingConfirmations.length === 0 ? (
-              <EmptyPanel>今天没有需要人工确认的工作</EmptyPanel>
-            ) : (
-              <div className="space-y-[10px]">
-                {pendingConfirmations.slice(0, 3).map((handoff) => (
-                  <article key={handoff.id} className="flex min-h-[124px] items-center gap-[18px] rounded-[16px] border border-[#f4e3bd] bg-[#fff9ed] px-[22px] py-[18px] max-[760px]:flex-wrap">
-                    <span className="grid size-[48px] shrink-0 place-items-center rounded-full bg-white text-[#a87517]"><FileText className="size-[21px]" /></span>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-[14px] font-semibold text-[#18181a]">{handoff.title}</h3>
-                      <p className="mt-[5px] line-clamp-2 text-[11px] leading-[18px] text-[#858b9c]">{handoff.description}</p>
-                    </div>
-                    <span className="text-[10px] text-[#8b6a28]">{formatShortTime(handoff.timestamp)} 更新</span>
-                    <button type="button" onClick={() => handoff.kind === 'evolution_proposal' ? navigate(EnterpriseRoute.Evolution) : handoff.session_id && navigate(`${EnterpriseRoute.Chat}/${encodeURIComponent(handoff.session_id)}`)} className="h-[44px] rounded-[10px] bg-[#18181a] px-[24px] text-[12px] font-medium text-white transition-opacity hover:opacity-80">
-                      打开并确认
-                    </button>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
+          <section className="mt-[14px] grid grid-cols-[minmax(0,1.35fr)_minmax(300px,0.85fr)] gap-[14px] max-[980px]:grid-cols-1">
+            <article className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
+              <header className="flex h-[54px] items-center justify-between border-b border-[#eceef1] px-[18px]">
+                <div>
+                  <h2 className="text-[15px] font-semibold text-[#18181a]">今日任务</h2>
+                  <p className="mt-[2px] text-[9px] text-[#a0a5b1]">{todayCompleted} 项已完成 · {todayActive.length} 项进行中</p>
+                </div>
+                <button type="button" onClick={() => navigate(EnterpriseRoute.Chat)} className="flex items-center gap-[4px] text-[10px] text-[#858b9c] hover:text-[#18181a]">
+                  安排新工作 <ArrowUpRight className="size-[12px]" />
+                </button>
+              </header>
+              {todayItems.length ? (
+                <WorkList items={todayItems.slice(0, 6)} onOpen={openWorkItem} />
+              ) : (
+                <div className="flex min-h-[176px] flex-col items-center justify-center px-[20px] text-center">
+                  <span className="grid size-[42px] place-items-center rounded-full bg-[#edf8f0] text-[#249358]"><CircleCheck className="size-[19px]" /></span>
+                  <p className="mt-[11px] text-[12px] font-medium text-[#35363b]">今天没有新增任务</p>
+                  <p className="mt-[4px] text-[10px] text-[#9298a4]">{agentName} 当前没有进行中的工作</p>
+                </div>
+              )}
+            </article>
 
-          <section>
-            <h2 className="mb-[10px] text-[16px] font-semibold text-[#18181a]">本周沉淀</h2>
-            <article className="flex min-h-[134px] items-center gap-[18px] rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[22px] py-[18px] max-[760px]:flex-wrap">
-              <span className="grid size-[48px] shrink-0 place-items-center rounded-full bg-[#f4f2ff] text-[#6861a3]"><BookOpen className="size-[21px]" /></span>
-              <div className="min-w-0 flex-1">
-                <h3 className="truncate text-[14px] font-semibold text-[#18181a]">{latestCapabilityChange?.instruction || '本周还没有新的沉淀'}</h3>
-                <p className="mt-[5px] text-[11px] text-[#858b9c]">{latestCapabilityChange ? `已写入 ${latestCapabilityChange.label}，后续真实复用 ${latestCapabilityChange.reuse_count} 次` : '会话经验经你审核并写入 Skill 后才会显示在这里'}</p>
-              </div>
-              <div className="min-w-[180px] border-l border-[#eceef1] pl-[24px] max-[760px]:border-l-0 max-[760px]:pl-0">
-                <p className="text-[10px] text-[#858b9c]">本周变化</p>
-                <p className="mt-[5px] text-[13px] font-medium text-[#18181a]">{capabilityChanges.length} 项已沉淀</p>
-              </div>
-              <button type="button" disabled={!latestCapabilityChange} onClick={() => latestCapabilityChange && navigate(EnterpriseRoute.Evolution)} className="h-[40px] rounded-[10px] border-[0.5px] border-[#d9dce3] bg-white px-[18px] text-[11px] text-[#18181a] hover:bg-[#f6f6f6] disabled:cursor-not-allowed disabled:opacity-40">
-                查看沉淀详情
-              </button>
+            <article className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] pt-[16px] pb-[8px]">
+              <header className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-[15px] font-semibold text-[#18181a]">近 7 天完成节奏</h2>
+                  <p className="mt-[2px] text-[9px] text-[#a0a5b1]">每天有效完成的工作数量</p>
+                </div>
+                <TrendingUp className="size-[17px] text-[#249358]" />
+              </header>
+              <ReplyTrendChart points={trendPoints} />
             </article>
           </section>
-        </div>
+
+          <section className="mt-[14px] grid grid-cols-[minmax(0,1.35fr)_minmax(300px,0.85fr)] gap-[14px] max-[980px]:grid-cols-1">
+            <article className="overflow-hidden rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white">
+              <header className="flex h-[54px] items-center justify-between border-b border-[#eceef1] px-[18px]">
+                <h2 className="text-[15px] font-semibold text-[#18181a]">最近完成</h2>
+                <button type="button" onClick={() => navigate(EnterpriseRoute.Operations)} className="flex items-center gap-[4px] text-[10px] text-[#858b9c] hover:text-[#18181a]">查看经营总览 <ArrowUpRight className="size-[12px]" /></button>
+              </header>
+              <RecentResultsTable items={recentItems.slice(0, 4)} onOpen={openWorkItem} />
+            </article>
+
+            <div className="grid gap-[14px]">
+              <article className={cn('rounded-[16px] border px-[16px] py-[15px]', pendingConfirmations.length ? 'border-[#f1dfb9] bg-[#fff9ed]' : 'border-[#e3e7f1] bg-white')}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-[9px]"><span className={cn('grid size-[32px] place-items-center rounded-full', pendingConfirmations.length ? 'bg-white text-[#9b6500]' : 'bg-[#edf8f0] text-[#249358]')}>{pendingConfirmations.length ? <FileText className="size-[15px]" /> : <CircleCheck className="size-[15px]" />}</span><div><h2 className="text-[13px] font-semibold text-[#18181a]">等你确认</h2><p className="mt-[2px] text-[9px] text-[#9298a4]">{pendingConfirmations.length ? `${pendingConfirmations.length} 项需要处理` : '当前没有待确认事项'}</p></div></div>
+                  {pendingConfirmations[0] && <button type="button" onClick={() => pendingConfirmations[0].kind === 'evolution_proposal' ? navigate(EnterpriseRoute.Evolution) : pendingConfirmations[0].session_id && navigate(`${EnterpriseRoute.Chat}/${encodeURIComponent(pendingConfirmations[0].session_id)}`)} className="rounded-[8px] bg-[#18181a] px-[11px] py-[7px] text-[9px] text-white">打开</button>}
+                </div>
+              </article>
+
+              <button type="button" disabled={!latestCapabilityChange} onClick={() => latestCapabilityChange && navigate(EnterpriseRoute.Evolution)} className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[16px] text-left transition-colors hover:border-[#cec8ef] disabled:cursor-default">
+                <div className="flex items-center justify-between"><h2 className="text-[13px] font-semibold text-[#18181a]">最新沉淀</h2><Sparkles className="size-[16px] text-[#6861a3]" /></div>
+                <p className="mt-[10px] line-clamp-2 text-[11px] leading-[18px] font-medium text-[#35363b]">{latestCapabilityChange?.instruction || '本周还没有形成新经验'}</p>
+                <p className="mt-[8px] text-[9px] text-[#9298a4]">{latestCapabilityChange ? `已写入 ${latestCapabilityChange.label} · 后续复用 ${latestCapabilityChange.reuse_count} 次` : '完成审核后会展示在这里'}</p>
+              </button>
+            </div>
+          </section>
+        </>
       )}
     </main>
   );
