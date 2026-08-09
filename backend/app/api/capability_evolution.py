@@ -7,6 +7,7 @@ from app.capability_evolution.schema import (
     CapabilityEvolutionActionRequest,
     CapabilityEvolutionLearnRequest,
     CapabilityEvolutionProposalRead,
+    CapabilityEvolutionSummaryRead,
 )
 from app.capability_evolution.service import CapabilityEvolutionService
 from app.db import get_session
@@ -15,6 +16,22 @@ from app.security.auth import get_current_user
 
 
 router = APIRouter(prefix="/api/enterprise/agents", tags=["capability-evolution"])
+
+
+@router.get("/{agent_id}/evolution-summary", response_model=CapabilityEvolutionSummaryRead)
+def get_evolution_summary(
+    agent_id: str,
+    tenant_id: str = Query(...),
+    period_days: int = Query(default=30, ge=1, le=90),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> CapabilityEvolutionSummaryRead:
+    return CapabilityEvolutionService(db).evolution_summary(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        current_user=current_user,
+        period_days=period_days,
+    )
 
 
 @router.get("/{agent_id}/evolution-proposals", response_model=list[CapabilityEvolutionProposalRead])

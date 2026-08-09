@@ -8,7 +8,12 @@ from typing import Any
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from app.capability_evolution.schema import CapabilityEvolutionProposalRead
+from app.capability_evolution.schema import (
+    CapabilityEvolutionActivityRead,
+    CapabilityEvolutionProposalRead,
+    CapabilityEvolutionSkillProgressRead,
+    CapabilityEvolutionSummaryRead,
+)
 from app.db.models import (
     AgentEvent,
     AgentResourceBinding,
@@ -263,6 +268,156 @@ class CapabilityEvolutionService:
             .order_by(CapabilityEvolutionProposal.created_at.desc())
         ).all()
         return [self._read(row) for row in rows]
+
+    def evolution_summary(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str,
+        current_user: User,
+        period_days: int = 30,
+        now: datetime | None = None,
+    ) -> CapabilityEvolutionSummaryRead:
+        ensure_agent_scope_manager(self.db, tenant_id, agent_id, current_user)
+        now = now or utc_now()
+        cutoff = now - timedelta(days=period_days)
+
+        bindings = self.db.exec(
+            select(AgentResourceBinding).where(
+                AgentResourceBinding.tenant_id == tenant_id,
+                AgentResourceBinding.agent_id == agent_id,
+                AgentResourceBinding.resource_type == "general_skill",
+                AgentResourceBinding.status == "active",
+            )
+        ).all()
+        skill_rows = self.db.exec(
+            select(GeneralSkill).where(
+                GeneralSkill.tenant_id == tenant_id,
+                GeneralSkill.id.in_([binding.resource_id for binding in bindings]),
+                GeneralSkill.status == "published",
+            )
+        ).all()
+        skills_by_slug = {row.slug: row for row in skill_rows}
+
+        events = self.db.exec(
+            select(AgentEvent)
+            .join(ChatSession, AgentEvent.session_id == ChatSession.id)
+            .where(
+                AgentEvent.tenant_id == tenant_id,
+                AgentEvent.created_at >= cutoff,
+                AgentEvent.event_type.in_(
+                    ["assistant_message_created", "claude_skill_loaded", "tool_call_finished"]
+                ),
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.agent_id == agent_id,
+            )
+            .order_by(AgentEvent.created_at.asc())
+        ).all()
+        completed_sessions = {
+            event.session_id for event in events if event.event_type == "assistant_message_created"
+        }
+        successful_sessions = {
+            event.session_id
+            for event in events
+            if event.event_type == "tool_call_finished"
+            and (event.payload_json or {}).get("success") is True
+        }
+        session_skill: dict[str, str] = {}
+        session_skill_time: dict[str, datetime] = {}
+        for event in events:
+            if event.event_type != "claude_skill_loaded":
+                continue
+            slug = str((event.payload_json or {}).get("slug") or "")
+            if slug not in skills_by_slug:
+                continue
+            session_skill[event.session_id] = slug
+            session_skill_time[event.session_id] = event.created_at
+
+        proposals = self.db.exec(
+            select(CapabilityEvolutionProposal).where(
+                CapabilityEvolutionProposal.tenant_id == tenant_id,
+                CapabilityEvolutionProposal.agent_id == agent_id,
+            )
+        ).all()
+        active_proposals = [
+            row
+            for row in proposals
+            if row.status in {"pending", "applied"} and row.created_at >= cutoff
+        ]
+        applied = [row for row in proposals if row.status == "applied"]
+        proposal_reads = [self._read(row) for row in applied]
+        reuse_by_skill = {
+            row.target_resource_id: sum(
+                item.reuse_count
+                for item in proposal_reads
+                if item.target_resource_id == row.target_resource_id
+            )
+            for row in applied
+        }
+
+        skill_progress: list[CapabilityEvolutionSkillProgressRead] = []
+        for skill in sorted(skill_rows, key=lambda row: row.name.lower()):
+            session_ids = {
+                session_id for session_id, slug in session_skill.items() if slug == skill.slug
+            }
+            verified_ids = session_ids & successful_sessions
+            applied_for_skill = [
+                row for row in applied if row.target_resource_id == skill.id
+            ]
+            last_used_at = max(
+                (session_skill_time[session_id] for session_id in session_ids),
+                default=None,
+            )
+            skill_progress.append(
+                CapabilityEvolutionSkillProgressRead(
+                    skill_id=skill.id,
+                    slug=skill.slug,
+                    label=skill.name,
+                    work_count=len(session_ids),
+                    verified_count=len(verified_ids),
+                    learned_count=len(applied_for_skill),
+                    reuse_count=reuse_by_skill.get(skill.id, 0),
+                    last_used_at=last_used_at,
+                )
+            )
+
+        session_rows = self.db.exec(
+            select(ChatSession).where(
+                ChatSession.tenant_id == tenant_id,
+                ChatSession.agent_id == agent_id,
+                ChatSession.id.in_(list(session_skill)),
+            )
+        ).all()
+        sessions_by_id = {row.id: row for row in session_rows}
+        verified_activity = sorted(
+            (
+                (session_skill_time[session_id], session_id, slug)
+                for session_id, slug in session_skill.items()
+                if session_id in successful_sessions
+            ),
+            reverse=True,
+        )[:6]
+        recent_activity = [
+            CapabilityEvolutionActivityRead(
+                session_id=session_id,
+                title=(sessions_by_id.get(session_id).title if sessions_by_id.get(session_id) else None)
+                or "未命名工作",
+                skill_label=skills_by_slug[slug].name,
+                occurred_at=occurred_at,
+            )
+            for occurred_at, session_id, slug in verified_activity
+        ]
+        return CapabilityEvolutionSummaryRead(
+            agent_id=agent_id,
+            period_days=period_days,
+            completed_work=len(completed_sessions),
+            skill_work=len(session_skill),
+            proposed_count=len(active_proposals),
+            learned_count=len([row for row in active_proposals if row.status == "applied"]),
+            reuse_count=sum(item.reuse_count for item in proposal_reads),
+            skills=skill_progress,
+            recent_activity=recent_activity,
+        )
 
     def apply_proposal(
         self,

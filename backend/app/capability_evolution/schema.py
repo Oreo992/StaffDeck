@@ -36,3 +36,33 @@ class CapabilityEvolutionProposalRead(BaseModel):
     rejected_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CapabilityEvolutionSkillProgressRead(BaseModel):
+    skill_id: str
+    slug: str
+    label: str
+    work_count: int = 0
+    verified_count: int = 0
+    learned_count: int = 0
+    reuse_count: int = 0
+    last_used_at: datetime | None = None
+
+
+class CapabilityEvolutionActivityRead(BaseModel):
+    session_id: str
+    title: str
+    skill_label: str
+    occurred_at: datetime
+
+
+class CapabilityEvolutionSummaryRead(BaseModel):
+    agent_id: str
+    period_days: int
+    completed_work: int = 0
+    skill_work: int = 0
+    proposed_count: int = 0
+    learned_count: int = 0
+    reuse_count: int = 0
+    skills: list[CapabilityEvolutionSkillProgressRead] = Field(default_factory=list)
+    recent_activity: list[CapabilityEvolutionActivityRead] = Field(default_factory=list)

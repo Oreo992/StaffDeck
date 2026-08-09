@@ -1,12 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Check, ChevronDown, History, Lightbulb, RefreshCw, ShieldCheck, Sparkles, X } from 'lucide-react';
+import {
+  ArrowRight,
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleCheckBig,
+  History,
+  Lightbulb,
+  RefreshCw,
+  Sparkles,
+  Target,
+  X,
+} from 'lucide-react';
 
 import { api, TENANT_ID } from '@/api/client';
 import AppHeader from '@/components/AppHeader';
 import { cn } from '@/lib/utils';
 import { notify } from '@/components/ui/app-toast';
 import type { EnterpriseAuthUser } from '@/auth';
-import type { AgentProfileRead, CapabilityEvolutionProposalRead } from '@/types';
+import type {
+  AgentProfileRead,
+  CapabilityEvolutionProposalRead,
+  CapabilityEvolutionSummaryRead,
+} from '@/types';
 import { employeeDisplayName } from '@/employee';
 
 
@@ -17,6 +34,14 @@ function formatTime(value?: string | null): string {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function formatDay(value?: string | null): string {
+  if (!value) return '尚未使用';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
   }).format(new Date(value));
 }
 
@@ -129,24 +154,35 @@ export default function CapabilityEvolutionPage({
   onLogout?: () => void;
 }) {
   const [rows, setRows] = useState<CapabilityEvolutionProposalRead[]>([]);
+  const [summary, setSummary] = useState<CapabilityEvolutionSummaryRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [learning, setLearning] = useState(false);
   const [busyId, setBusyId] = useState('');
+  const [selectedStage, setSelectedStage] = useState('work');
+  const [expandedSkillId, setExpandedSkillId] = useState('');
 
   const load = useCallback(async () => {
     if (!agent?.id) {
       setRows([]);
+      setSummary(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const result = await api.get<CapabilityEvolutionProposalRead[]>(
-        `/api/enterprise/agents/${encodeURIComponent(agent.id)}/evolution-proposals?tenant_id=${TENANT_ID}`,
-      );
-      setRows(result);
+      const [proposalRows, summaryRow] = await Promise.all([
+        api.get<CapabilityEvolutionProposalRead[]>(
+          `/api/enterprise/agents/${encodeURIComponent(agent.id)}/evolution-proposals?tenant_id=${TENANT_ID}`,
+        ),
+        api.get<CapabilityEvolutionSummaryRead>(
+          `/api/enterprise/agents/${encodeURIComponent(agent.id)}/evolution-summary?tenant_id=${TENANT_ID}&period_days=30`,
+        ),
+      ]);
+      setRows(proposalRows);
+      setSummary(summaryRow);
     } catch (error) {
       setRows([]);
+      setSummary(null);
       notify.error(error instanceof Error ? error.message : '加载进化建议失败');
     } finally {
       setLoading(false);
@@ -157,7 +193,39 @@ export default function CapabilityEvolutionPage({
 
   const pending = useMemo(() => rows.filter((row) => row.status === 'pending'), [rows]);
   const applied = useMemo(() => rows.filter((row) => row.status === 'applied'), [rows]);
-  const totalReuse = applied.reduce((sum, row) => sum + row.reuse_count, 0);
+  const stages = [
+    {
+      id: 'work',
+      label: '完成工作',
+      value: summary?.completed_work || 0,
+      description: '有结果的真实会话',
+      detail: `过去 30 天，${employeeDisplayName(agent)} 交付了 ${summary?.completed_work || 0} 项有结果的工作。`,
+    },
+    {
+      id: 'practice',
+      label: '能力练习',
+      value: summary?.skill_work || 0,
+      description: '使用过专业 Skill',
+      detail: `其中 ${summary?.skill_work || 0} 项工作真正调用了专业 Skill，是可沉淀经验的有效样本。`,
+    },
+    {
+      id: 'learning',
+      label: '形成经验',
+      value: summary?.proposed_count || 0,
+      description: '已提出或已经学会',
+      detail: `目前形成 ${summary?.proposed_count || 0} 条有证据的经验，${summary?.learned_count || 0} 条已经获得你的确认。`,
+    },
+    {
+      id: 'reuse',
+      label: '后续复用',
+      value: summary?.reuse_count || 0,
+      description: '在新工作中再次生效',
+      detail: summary?.reuse_count
+        ? `学会的做法已经在后续真实工作中帮上忙 ${summary.reuse_count} 次。`
+        : '经验已经学会，正在等待下一次同类任务验证是否真正帮上忙。',
+    },
+  ];
+  const activeStage = stages.find((stage) => stage.id === selectedStage) || stages[0];
 
   const learn = async () => {
     if (!agent?.id) return;
@@ -223,42 +291,106 @@ export default function CapabilityEvolutionPage({
         )}
       />
 
-      <section className="mb-[18px] rounded-[18px] border-[0.5px] border-[#dfe6df] bg-[#f8fbf8] px-[20px] py-[17px]">
-        <div className="flex items-center gap-[8px] text-[12px] font-semibold text-[#233727]">
-          <ShieldCheck className="size-[17px] text-[#319447]" /> 它是怎么变得更聪明的？
+      <section className="overflow-hidden rounded-[18px] border-[0.5px] border-[#dfe6df] bg-white">
+        <div className="flex items-center justify-between border-b border-[#edf1ed] bg-[#f8fbf8] px-[20px] py-[14px]">
+          <div>
+            <h2 className="text-[14px] font-semibold text-[#233727]">近 30 天复利路径</h2>
+            <p className="mt-[3px] text-[10px] text-[#78817a]">点击每一步，看数字是怎么产生的</p>
+          </div>
+          <span className="rounded-full bg-white px-[9px] py-[4px] text-[10px] text-[#3d854d] shadow-sm">真实数据</span>
         </div>
-        <div className="mt-[14px] grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-[12px] max-[720px]:grid-cols-1">
-          {[
-            ['1', '回看真实工作', '找出做得好的方法或反复出现的问题'],
-            ['2', '提出学习建议', '告诉你以后准备怎么做、为什么'],
-            ['3', '你确认后生效', '不会偷偷修改，下次同类工作开始复用'],
-          ].map(([step, title, description], index) => (
-            <div key={step} className="contents max-[720px]:block">
-              <div className="flex items-start gap-[10px]">
-                <span className="grid size-[24px] shrink-0 place-items-center rounded-full bg-[#319447] text-[10px] font-semibold text-white">{step}</span>
-                <div>
-                  <p className="text-[11px] font-medium text-[#233727]">{title}</p>
-                  <p className="mt-[3px] text-[10px] leading-[16px] text-[#78817a]">{description}</p>
-                </div>
-              </div>
-              {index < 2 && <ArrowRight className="size-[15px] text-[#aeb8b0] max-[720px]:hidden" />}
+        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-stretch px-[16px] py-[16px] max-[760px]:grid-cols-1">
+          {stages.map((stage, index) => (
+            <div key={stage.id} className="contents max-[760px]:block">
+              <button
+                type="button"
+                aria-pressed={selectedStage === stage.id}
+                onClick={() => setSelectedStage(stage.id)}
+                className={cn(
+                  'rounded-[14px] px-[14px] py-[13px] text-left transition-colors',
+                  selectedStage === stage.id ? 'bg-[#edf8ef]' : 'hover:bg-[#f7f8fa]',
+                )}
+              >
+                <span className="text-[10px] font-medium text-[#78817a]">{stage.label}</span>
+                <span className="mt-[5px] block text-[27px] font-semibold leading-none text-[#18181a]">{stage.value}</span>
+                <span className="mt-[6px] block text-[10px] leading-[16px] text-[#9a9fa9]">{stage.description}</span>
+              </button>
+              {index < stages.length - 1 && <ArrowRight className="mx-[5px] size-[15px] self-center text-[#b9c1ba] max-[760px]:my-[4px] max-[760px]:rotate-90" />}
             </div>
           ))}
         </div>
+        <div className="mx-[16px] mb-[16px] flex items-start gap-[9px] rounded-[11px] bg-[#f7f8fa] px-[13px] py-[10px] text-[10px] leading-[17px] text-[#646a78]">
+          <Target className="mt-[1px] size-[14px] shrink-0 text-[#319447]" /> {activeStage.detail}
+        </div>
       </section>
 
-      <section className="grid grid-cols-3 gap-[12px] max-[700px]:grid-cols-1">
-        {[
-          ['等你决定', pending.length, '条建议还没有生效'],
-          ['已经学会', applied.length, '条做法已加入能力'],
-          ['后来帮上忙', totalReuse, '次在后续工作中复用'],
-        ].map(([label, value, description]) => (
-          <div key={String(label)} className="rounded-[14px] border-[0.5px] border-[#e3e7f1] bg-white px-[18px] py-[16px]">
-            <p className="text-[10px] text-[#858b9c]">{label}</p>
-            <p className="mt-[5px] text-[24px] font-semibold text-[#18181a]">{value}</p>
-            <p className="mt-[2px] text-[10px] text-[#a0a5b0]">{description}</p>
+      <section className="mt-[18px] grid grid-cols-[minmax(0,1.5fr)_minmax(260px,0.8fr)] gap-[14px] max-[820px]:grid-cols-1">
+        <article className="rounded-[18px] border-[0.5px] border-[#e3e7f1] bg-white p-[18px]">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-[14px] font-semibold text-[#18181a]">能力成长地图</h2>
+              <p className="mt-[3px] text-[10px] text-[#858b9c]">不是看装了多少 Skill，而是看真正练过和学会了多少</p>
+            </div>
+            <Brain className="size-[18px] text-[#319447]" />
           </div>
-        ))}
+          <div className="mt-[12px] space-y-[8px]">
+            {(summary?.skills || []).map((skill) => {
+              const expanded = expandedSkillId === skill.skill_id;
+              const progress = Math.min(100, skill.verified_count * 20 + skill.learned_count * 35 + Math.min(skill.reuse_count, 2) * 15);
+              return (
+                <button
+                  key={skill.skill_id}
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedSkillId(expanded ? '' : skill.skill_id)}
+                  className="block w-full rounded-[12px] border border-[#eceef1] px-[13px] py-[11px] text-left hover:border-[#cadaca]"
+                >
+                  <div className="flex items-start gap-[10px]">
+                    <span className={cn('mt-[1px] grid size-[27px] shrink-0 place-items-center rounded-full', skill.learned_count ? 'bg-[#edf8ef] text-[#319447]' : 'bg-[#f3f4f6] text-[#9298a4]')}>
+                      {skill.learned_count ? <CircleCheckBig className="size-[14px]" /> : <Sparkles className="size-[13px]" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-[10px]">
+                        <p className="truncate text-[11px] font-medium text-[#26272b]">{skill.label}</p>
+                        <ChevronRight className={cn('size-[13px] shrink-0 text-[#a0a5b0] transition-transform', expanded && 'rotate-90')} />
+                      </div>
+                      <div className="mt-[7px] h-[4px] overflow-hidden rounded-full bg-[#eef0f2]">
+                        <div className="h-full rounded-full bg-[#45a457]" style={{ width: `${progress}%` }} />
+                      </div>
+                      <p className="mt-[6px] text-[10px] text-[#858b9c]">练过 {skill.verified_count} 次 · 学会 {skill.learned_count} 条 · 复用 {skill.reuse_count} 次</p>
+                      {expanded && (
+                        <div className="mt-[9px] border-t border-[#eceef1] pt-[8px] text-[10px] leading-[17px] text-[#646a78]">
+                          <p>最近使用：{formatDay(skill.last_used_at)}</p>
+                          <p>{skill.learned_count ? (skill.reuse_count ? '已经在新工作中验证有效。' : '下一步：等待同类工作验证这条经验。') : (skill.verified_count >= 2 ? '已经积累足够样本，可以检查是否形成新经验。' : '继续在真实任务中使用，积累可学习样本。')}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="rounded-[18px] border-[0.5px] border-[#e3e7f1] bg-white p-[18px]">
+          <h2 className="text-[14px] font-semibold text-[#18181a]">经验从哪里来</h2>
+          <p className="mt-[3px] text-[10px] text-[#858b9c]">最近经过工具验证的真实工作</p>
+          <div className="mt-[13px] space-y-[12px]">
+            {(summary?.recent_activity || []).map((item, index) => (
+              <div key={item.session_id} className="flex gap-[9px]">
+                <div className="flex flex-col items-center">
+                  <span className="mt-[2px] size-[7px] rounded-full bg-[#45a457]" />
+                  {index < (summary?.recent_activity.length || 0) - 1 && <span className="mt-[3px] h-full w-px bg-[#e4e8e4]" />}
+                </div>
+                <div className="min-w-0 pb-[3px]">
+                  <p className="line-clamp-2 text-[10px] font-medium leading-[16px] text-[#35363b]">{item.title}</p>
+                  <p className="mt-[2px] text-[9px] text-[#969ba6]">{item.skill_label} · {formatDay(item.occurred_at)}</p>
+                </div>
+              </div>
+            ))}
+            {!summary?.recent_activity.length && <p className="py-[24px] text-center text-[10px] text-[#9a9fa9]">还没有经过工具验证的工作</p>}
+          </div>
+        </article>
       </section>
 
       <section className="mt-[20px]">

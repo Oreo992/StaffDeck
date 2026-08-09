@@ -717,6 +717,32 @@ export type CapabilityEvolutionProposalRead = {
   updated_at: string;
 };
 
+export type CapabilityEvolutionSummaryRead = {
+  agent_id: string;
+  period_days: number;
+  completed_work: number;
+  skill_work: number;
+  proposed_count: number;
+  learned_count: number;
+  reuse_count: number;
+  skills: Array<{
+    skill_id: string;
+    slug: string;
+    label: string;
+    work_count: number;
+    verified_count: number;
+    learned_count: number;
+    reuse_count: number;
+    last_used_at?: string | null;
+  }>;
+  recent_activity: Array<{
+    session_id: string;
+    title: string;
+    skill_label: string;
+    occurred_at: string;
+  }>;
+};
+
 export type AgentOperationsSummaryRead = {
   agent_id: string;
   timezone: string;

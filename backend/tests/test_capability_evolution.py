@@ -215,6 +215,78 @@ def test_learning_captures_repeated_successful_tool_pattern() -> None:
         assert "最近 2 次" in proposal.summary
 
 
+def test_evolution_summary_exposes_compounding_path_and_skill_progress() -> None:
+    with _test_session() as db:
+        owner, agent, skill = _seed_learning_evidence(db)
+        for index in (1, 2):
+            session_id = f"summary_session_{index}"
+            db.add(
+                ChatSession(
+                    id=session_id,
+                    tenant_id="tenant_demo",
+                    user_id=owner.id,
+                    agent_id=agent.id,
+                    title=f"真实研究 {index}",
+                )
+            )
+            event_time = NOW - timedelta(hours=index)
+            db.add_all(
+                [
+                    AgentEvent(
+                        tenant_id="tenant_demo",
+                        session_id=session_id,
+                        event_type="claude_skill_loaded",
+                        payload_json={"slug": skill.slug},
+                        created_at=event_time,
+                    ),
+                    AgentEvent(
+                        tenant_id="tenant_demo",
+                        session_id=session_id,
+                        event_type="tool_call_finished",
+                        payload_json={"success": True},
+                        created_at=event_time + timedelta(minutes=1),
+                    ),
+                    AgentEvent(
+                        tenant_id="tenant_demo",
+                        session_id=session_id,
+                        event_type="assistant_message_created",
+                        payload_json={},
+                        created_at=event_time + timedelta(minutes=2),
+                    ),
+                ]
+            )
+        db.commit()
+        service = CapabilityEvolutionService(db)
+        proposal = service.learn_from_recent_feedback(
+            tenant_id="tenant_demo",
+            agent_id=agent.id,
+            current_user=owner,
+            now=NOW,
+        )[0]
+        service.apply_proposal(
+            tenant_id="tenant_demo",
+            agent_id=agent.id,
+            proposal_id=proposal.id,
+            current_user=owner,
+            now=NOW,
+        )
+
+        summary = service.evolution_summary(
+            tenant_id="tenant_demo",
+            agent_id=agent.id,
+            current_user=owner,
+            now=NOW,
+        )
+
+        assert summary.completed_work == 2
+        assert summary.skill_work == 3
+        assert summary.proposed_count == 1
+        assert summary.learned_count == 1
+        assert summary.skills[0].verified_count == 2
+        assert summary.skills[0].learned_count == 1
+        assert [item.title for item in summary.recent_activity] == ["真实研究 1", "真实研究 2"]
+
+
 def _seed_learning_evidence(db: Session) -> tuple[User, AgentProfile, GeneralSkill]:
     db.add(Tenant(id="tenant_demo", name="Demo"))
     owner = User(
