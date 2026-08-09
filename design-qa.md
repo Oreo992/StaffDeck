@@ -76,3 +76,34 @@ final result: passed
 - Generating a proposal never edits the Skill. Applying requires employee-owner/admin permission and an exact base-content match, preventing stale proposals from overwriting newer edits.
 - The operations dashboard counts only approved, applied learning as “沉淀”; assigning a resource is no longer presented as learning.
 - Browser E2E verified proposal generation, Diff preview, approval, Skill write, later reuse counting, exact test-fixture cleanup, truthful empty states, and zero console warnings/errors.
+
+---
+
+# Operations Dashboard Design QA
+
+## Evidence
+
+- Reference: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-operations-density/00-selected-reference.png`
+- Implementation: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-operations-density/03-preview-v1.png`
+- Comparison: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-operations-density/04-comparison-v1.png`
+- State: preview environment, `QQQ · Claude`, 7-day period, authenticated admin session
+- Viewport: 1280 × 720. The 1442 × 1091 reference was proportionally normalized to the same 1280 px width and cropped to the same top viewport for comparison.
+
+## Verification
+
+- Typography and hierarchy: page title, KPI emphasis, section titles, table text, and secondary labels follow the selected reference.
+- Layout and spacing: five KPI cards, results table, two chart panels, and four capability cards preserve the intended grid and information density.
+- Color and components: green completion emphasis, purple learning emphasis, neutral borders, and rounded cards are consistent with the existing NeoSpark console.
+- Data integrity: all KPI values, recent result rows, capability counts, and chart series come from preview APIs for QQQ; no dashboard values are hard-coded.
+- Interaction: the 7-day/30-day selector refreshes successfully; both ECharts canvases render after each change.
+- Responsive behavior: the primary dashboard remains readable at 1280 × 720; lower capability cards continue below the viewport without overlapping the main panels.
+
+## Findings
+
+- P0: none.
+- P1: none.
+- P2: none. The implementation intentionally shows only categories present in real data, so the work composition legend is shorter than the conceptual reference.
+
+## Final Result
+
+passed
