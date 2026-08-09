@@ -234,13 +234,8 @@ export default function CapabilityEvolutionPage({
         userName={currentUser?.username}
         className="mb-[20px]"
         left={(
-          <div className="flex min-h-[54px] items-start justify-between gap-[18px] pr-[10px] max-[700px]:flex-col">
-            <div>
-              <h1 className="text-[26px] leading-[34px] font-semibold tracking-[-0.02em] text-[#18181a]">QQQ 学会了什么</h1>
-              <p className="mt-[5px] max-w-[620px] text-[12px] leading-[19px] text-[#858b9c]">
-                {employeeDisplayName(agent)} 会复盘做过的工作，把有效做法变成下次能直接使用的经验。只有你同意后，它才会真正学会。
-              </p>
-            </div>
+          <div className="flex min-h-[40px] items-center justify-between gap-[18px] pr-[10px] max-[700px]:flex-col max-[700px]:items-start">
+            <h1 className="text-[26px] leading-[34px] font-semibold tracking-[-0.02em] text-[#18181a]">QQQ 学会了什么</h1>
             <button
               type="button"
               disabled={learning}
@@ -261,11 +256,6 @@ export default function CapabilityEvolutionPage({
             <h2 className="mt-[5px] text-[17px] font-semibold leading-[26px] text-[#1d2c20]">
               {employeeDisplayName(agent)} 完成了 {summary?.completed_work || 0} 项工作，已经学会 {summary?.learned_count || 0} 条可复用做法。
             </h2>
-            <p className="mt-[6px] text-[11px] leading-[18px] text-[#6f786f]">
-              {summary?.reuse_count
-                ? `这些做法已在后续工作中帮上忙 ${summary.reuse_count} 次。`
-                : '下一次遇到同类任务时，系统会检查它有没有真正用上。'}
-            </p>
           </div>
           <div className="grid shrink-0 grid-cols-3 divide-x divide-[#dde7df] rounded-[13px] border border-[#e1e9e3] bg-white px-[8px] py-[10px] shadow-[0_5px_16px_rgba(34,69,42,0.04)]">
             {[
@@ -284,10 +274,7 @@ export default function CapabilityEvolutionPage({
 
       <section className="mt-[18px]">
         <div className="mb-[9px] flex items-end justify-between gap-[12px]">
-          <div>
-            <h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2>
-            <p className="mt-[2px] text-[10px] text-[#858b9c]">只有你确认，新的做法才会生效</p>
-          </div>
+          <h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2>
           <span className="text-[10px] text-[#858b9c]">{pending.length} 条</span>
         </div>
         <div className="space-y-[10px]">
@@ -308,10 +295,7 @@ export default function CapabilityEvolutionPage({
       </section>
 
       <section className="mt-[22px]">
-        <div className="mb-[9px]">
-          <h2 className="text-[15px] font-semibold text-[#18181a]">成长记录</h2>
-          <p className="mt-[2px] text-[10px] text-[#858b9c]">QQQ 已经学会、以后会主动使用的做法</p>
-        </div>
+        <h2 className="mb-[9px] text-[15px] font-semibold text-[#18181a]">成长记录</h2>
         {applied.length ? (
           <div className="space-y-[10px]">
             {applied.map((proposal) => (
