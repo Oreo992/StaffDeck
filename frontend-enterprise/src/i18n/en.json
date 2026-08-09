@@ -2128,5 +2128,20 @@
   "已经积累足够样本，可以检查是否形成新经验。": "Enough evidence has accumulated to check for a new learning.",
   "练过": "Practiced",
   "下一步：等待同类工作验证这条经验。": "Next: wait for similar work to validate this learning.",
-  "已经在新工作中验证有效。": "Already validated in new work."
+  "已经在新工作中验证有效。": "Already validated in new work.",
+  "条可复用做法。": " reusable practices.",
+  "这些做法已在后续工作中帮上忙 {1} 次。": "These practices helped in {1} subsequent tasks.",
+  "下一次遇到同类任务时，系统会检查它有没有真正用上。": "The system will check whether it is used in the next similar task.",
+  "需要你处理": "Needs Your Attention",
+  "只有你确认，新的做法才会生效": "A new practice only takes effect after your approval",
+  "目前没有需要确认的新做法": "No new practices need approval",
+  "QQQ 已经学会、以后会主动使用的做法": "Practices QQQ has learned and will use proactively",
+  "查看为什么学会": "See why this was learned",
+  "这条做法来自以下经过工具验证的真实工作：": "This practice came from the following tool-verified work:",
+  "收起全部能力": "Hide all capabilities",
+  "查看全部能力（{1}）": "View all capabilities ({1})",
+  "用过": "Used",
+  "项工作，已经学会": " tasks and learned ",
+  "收起依据": "Hide evidence",
+  "完成了": "Completed"
 }
