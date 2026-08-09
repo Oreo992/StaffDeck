@@ -286,7 +286,6 @@ export default function CapabilityEvolutionPage({
   const [learning, setLearning] = useState(false);
   const [busyId, setBusyId] = useState('');
   const [evidenceId, setEvidenceId] = useState('');
-  const [showAllSkills, setShowAllSkills] = useState(false);
 
   const load = useCallback(async () => {
     if (!agent?.id) {
@@ -320,6 +319,7 @@ export default function CapabilityEvolutionPage({
 
   const pending = useMemo(() => rows.filter((row) => row.status === 'pending'), [rows]);
   const applied = useMemo(() => rows.filter((row) => row.status === 'applied'), [rows]);
+  const rejected = useMemo(() => rows.filter((row) => row.status === 'rejected'), [rows]);
 
   const learn = async () => {
     if (!agent?.id) return;
@@ -357,6 +357,14 @@ export default function CapabilityEvolutionPage({
 
   if (loading) return <LoadingPage />;
   if (!agent) return <main className="p-[24px]"><EmptyState>请选择一名数字员工</EmptyState></main>;
+
+  const percent = (value: number, total: number) => total > 0 ? Math.round((value / total) * 100) : 0;
+  const conversionMetrics = [
+    { label: '能力参与率', value: percent(summary?.skill_work || 0, summary?.completed_work || 0), detail: `${summary?.skill_work || 0} / ${summary?.completed_work || 0} 项工作`, color: '#22a559' },
+    { label: '沉淀转化率', value: percent(summary?.learned_count || 0, summary?.skill_work || 0), detail: `${summary?.learned_count || 0} / ${summary?.skill_work || 0} 次验证`, color: '#7b68c6' },
+    { label: '复用验证率', value: percent(summary?.reuse_count || 0, summary?.learned_count || 0), detail: `${summary?.reuse_count || 0} / ${summary?.learned_count || 0} 条经验`, color: '#5688dc' },
+    { label: '建议采纳率', value: percent(applied.length, applied.length + rejected.length), detail: `${applied.length} 采纳 · ${rejected.length} 跳过`, color: '#e5a233' },
+  ];
 
   return (
     <main className="mx-auto min-h-full w-full max-w-[1220px] px-[24px] pt-[18px] pb-[40px] max-[900px]:px-0">
@@ -407,8 +415,39 @@ export default function CapabilityEvolutionPage({
         </article>
       </section>
 
+      <section className="mt-[14px] grid grid-cols-4 gap-[10px] max-[900px]:grid-cols-2 max-[520px]:grid-cols-1" aria-label="进化转化效率">
+        {conversionMetrics.map((metric) => (
+          <article key={metric.label} className="rounded-[14px] border-[0.5px] border-[#e3e7f1] bg-white px-[14px] py-[12px]">
+            <div className="flex items-start justify-between gap-[8px]"><div><p className="text-[10px] text-[#858b9c]">{metric.label}</p><strong className="mt-[5px] block text-[20px] leading-none font-semibold text-[#18181a]">{metric.value}%</strong></div><span className="rounded-full bg-[#f5f6f8] px-[7px] py-[4px] text-[9px] text-[#858b9c]">{metric.detail}</span></div>
+            <div className="mt-[10px] h-[5px] overflow-hidden rounded-full bg-[#eef0f3]"><div className="h-full rounded-full transition-[width]" style={{ width: `${Math.max(metric.value, metric.value ? 4 : 0)}%`, backgroundColor: metric.color }} /></div>
+          </article>
+        ))}
+      </section>
+
       <section className="mt-[14px]">
-        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2><span className="text-[10px] text-[#858b9c]">{pending.length} 条</span></div>
+        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><div><h2 className="text-[15px] font-semibold text-[#18181a]">能力资产</h2><p className="mt-[2px] text-[9px] text-[#a0a5b1]">每项能力的真实使用、验证和沉淀情况</p></div><span className="text-[10px] text-[#858b9c]">{summary?.skills.length || 0} 项能力</span></div>
+        <div className="grid grid-cols-3 gap-[10px] max-[900px]:grid-cols-1">
+          {(summary?.skills || []).map((skill) => {
+            const stage = skill.reuse_count > 0 ? '已复用' : skill.learned_count > 0 ? '已沉淀' : skill.verified_count > 0 ? '验证中' : '待积累';
+            const stageTone = skill.reuse_count > 0 ? 'bg-[#eaf8ef] text-[#249358]' : skill.learned_count > 0 ? 'bg-[#f0edff] text-[#6861a3]' : skill.verified_count > 0 ? 'bg-[#edf5ff] text-[#4778bd]' : 'bg-[#f3f4f6] text-[#858b9c]';
+            return (
+              <article key={skill.skill_id} className="rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white p-[15px]">
+                <div className="flex items-start justify-between gap-[10px]"><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#18181a]">{skill.label}</p><p className="mt-[4px] text-[9px] text-[#9298a4]">最近使用 {formatDay(skill.last_used_at)}</p></div><span className={cn('shrink-0 rounded-full px-[8px] py-[4px] text-[9px]', stageTone)}>{stage}</span></div>
+                <div className="mt-[13px] grid grid-cols-4 divide-x divide-[#eceef1] rounded-[11px] bg-[#fafbfc] py-[9px] text-center">
+                  <div><strong className="block text-[15px] font-semibold text-[#18181a]">{skill.work_count}</strong><span className="mt-[2px] block text-[8px] text-[#9298a4]">触发</span></div>
+                  <div><strong className="block text-[15px] font-semibold text-[#249358]">{skill.verified_count}</strong><span className="mt-[2px] block text-[8px] text-[#9298a4]">验证</span></div>
+                  <div><strong className="block text-[15px] font-semibold text-[#6861a3]">{skill.learned_count}</strong><span className="mt-[2px] block text-[8px] text-[#9298a4]">学会</span></div>
+                  <div><strong className="block text-[15px] font-semibold text-[#5688dc]">{skill.reuse_count}</strong><span className="mt-[2px] block text-[8px] text-[#9298a4]">复用</span></div>
+                </div>
+                <p className="mt-[10px] text-[9px] leading-[15px] text-[#858b9c]">{stage === '已复用' ? '经验已在后续真实任务中再次生效' : stage === '已沉淀' ? '已形成规则，等待下一次同类任务验证' : stage === '验证中' ? '已有真实实践，继续积累可学习证据' : '尚未产生经过工具验证的真实实践'}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="mt-[14px]">
+        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2><div className="flex items-center gap-[10px] text-[9px] text-[#858b9c]"><span>{summary?.proposed_count || rows.length} 条建议</span><span>{pending.length} 待确认</span><span>{applied.length} 已采纳</span><span>{rejected.length} 已跳过</span></div></div>
         <div className="space-y-[10px]">
           {pending.length ? pending.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} busy={busyId === proposal.id} onApply={() => void act(proposal, 'apply')} onReject={() => void act(proposal, 'reject')} />) : (
             <div className="flex items-center gap-[9px] rounded-[13px] border border-[#e4e9e5] bg-white px-[15px] py-[12px] text-[11px] text-[#69716b]"><CircleCheckBig className="size-[15px] text-[#319447]" />目前没有需要确认的新做法</div>
@@ -436,27 +475,6 @@ export default function CapabilityEvolutionPage({
         </article>
       </section>
 
-      <section className="mt-[14px] rounded-[16px] border-[0.5px] border-[#e3e7f1] bg-white px-[16px] py-[14px]">
-        <button
-          type="button"
-          aria-expanded={showAllSkills}
-          onClick={() => setShowAllSkills(!showAllSkills)}
-          className="flex w-full items-center justify-between gap-[5px] text-[11px] font-medium text-[#35363b] hover:text-[#18181a]"
-        >
-          {showAllSkills ? '收起全部能力' : `查看全部能力（${summary?.skills.length || 0}）`}
-          <ChevronDown className={cn('size-[13px] transition-transform', showAllSkills && 'rotate-180')} />
-        </button>
-        {showAllSkills && (
-          <div className="mt-[12px] grid grid-cols-3 gap-[8px] border-t border-[#eceef1] pt-[12px] max-[760px]:grid-cols-1">
-            {(summary?.skills || []).map((skill) => (
-              <div key={skill.skill_id} className="rounded-[12px] border border-[#e7e9ed] bg-white px-[13px] py-[11px]">
-                <p className="truncate text-[10px] font-medium text-[#35363b]">{skill.label}</p>
-                <p className="mt-[5px] text-[9px] text-[#8b909a]">用过 {skill.verified_count} 次 · 学会 {skill.learned_count} 条 · 复用 {skill.reuse_count} 次</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </main>
   );
 }
