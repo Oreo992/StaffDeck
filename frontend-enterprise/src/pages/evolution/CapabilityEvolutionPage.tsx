@@ -447,7 +447,7 @@ export default function CapabilityEvolutionPage({
       </section>
 
       <section className="mt-[14px]">
-        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2><div className="flex items-center gap-[10px] text-[9px] text-[#858b9c]"><span>{summary?.proposed_count || rows.length} 条建议</span><span>{pending.length} 待确认</span><span>{applied.length} 已采纳</span><span>{rejected.length} 已跳过</span></div></div>
+        <div className="mb-[9px] flex items-end justify-between gap-[12px]"><h2 className="text-[15px] font-semibold text-[#18181a]">需要你处理</h2><div className="flex items-center gap-[10px] text-[9px] text-[#858b9c]"><span>{rows.length} 条建议</span><span>{pending.length} 待确认</span><span>{applied.length} 已采纳</span><span>{rejected.length} 已跳过</span></div></div>
         <div className="space-y-[10px]">
           {pending.length ? pending.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} busy={busyId === proposal.id} onApply={() => void act(proposal, 'apply')} onReject={() => void act(proposal, 'reject')} />) : (
             <div className="flex items-center gap-[9px] rounded-[13px] border border-[#e4e9e5] bg-white px-[15px] py-[12px] text-[11px] text-[#69716b]"><CircleCheckBig className="size-[15px] text-[#319447]" />目前没有需要确认的新做法</div>
