@@ -110,6 +110,40 @@ passed
 
 ---
 
+# Design QA — Capability Evolution Data Density
+
+## Evidence
+
+- Visual-system source: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-operations-density/00-selected-reference.png`
+- Previous sparse state: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-today-evolution-redesign/06-evolution-preview.jpg`
+- Final implementation: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-evolution-density-v2/02-preview-final.jpg`
+- Full-view comparison: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-evolution-density-v2/03-before-after.jpg`
+- Focused comparison: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-evolution-density-v2/04-focus-comparison.jpg`
+- Viewport and density: 1280 × 720 CSS pixels at 1×; source and implementation captures were normalized to 1280 × 720 before comparison.
+- State: authenticated preview environment, `QQQ · Claude`, live 30-day data.
+
+## Verification
+
+- Typography: KPI values, conversion percentages, asset titles, and supporting labels preserve the existing NeoSpark hierarchy without clipping.
+- Spacing and layout: the new conversion row and three-card capability inventory fill the earlier empty region while retaining the established 16 px card rhythm.
+- Colors: green verification, violet learning, amber adoption, and neutral zero-state tokens remain consistent with the dashboard system.
+- Images and icons: the existing NeoSpark logo, QQQ avatar, and project icon library are unchanged; no placeholder imagery or CSS-drawn substitutes were introduced.
+- Copy and content: every number derives from the evolution API. Zero-use skills remain visible and explicitly marked `待积累`; no synthetic records were added.
+- Interactions: both ECharts render, learning evidence expands/collapses, and the proposal ledger reports 2 total, 0 pending, 1 adopted, and 1 skipped.
+- Browser console errors: none.
+
+## Findings and History
+
+- Earlier finding (P2): the page exposed only top-line totals and two charts, leaving capability breadth, conversion efficiency, and proposal history visually underrepresented.
+- Fix: added four derived conversion metrics, a permanent capability-asset grid, lifecycle labels, and a complete proposal ledger using existing truthful API fields.
+- Post-fix comparison shows no actionable P0, P1, or P2 issues. Content continues below the first viewport by design and remains readable without overlap.
+
+## Final Result
+
+passed
+
+---
+
 # Design QA — Today Work and Capability Evolution
 
 ## Evidence
