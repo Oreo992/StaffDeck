@@ -107,3 +107,37 @@ final result: passed
 ## Final Result
 
 passed
+
+---
+
+# Design QA — Today Work and Capability Evolution
+
+## Evidence
+
+- Visual system source: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-operations-density/00-selected-reference.png`
+- Today implementation: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-today-evolution-redesign/05-today-preview.jpg`
+- Evolution implementation: `C:/Users/Administrator/.codex/visualizations/2026/08/09/staffdeck-today-evolution-redesign/06-evolution-preview.jpg`
+- Full-view comparisons: `07-today-comparison.jpg` and `08-evolution-comparison.jpg`
+- Focused main-content comparisons: `07-today-comparison-focused.jpg` and `08-evolution-comparison-focused.jpg`
+- State: authenticated preview environment, `QQQ · Claude`, 7-day operations data and 30-day evolution data.
+- Viewport: 1280 × 720 CSS pixels at 1× density. The 1442 × 1091 source was proportionally normalized to 1280 px width and cropped to the same top viewport.
+
+## Verification
+
+- Typography: title, KPI, card heading, table, and supporting text hierarchy match the selected NeoSpark dashboard system without clipping or accidental wrapping.
+- Spacing and layout: both pages use the same page width, four-column KPI rhythm, 14 px section gaps, 16 px cards, thin borders, and balanced two-column content regions.
+- Colors: completion green, learning violet, approval amber, and neutral gray tokens remain semantically consistent across all three dashboards.
+- Images and icons: existing NeoSpark logo and employee avatar remain unchanged; visible actions use the project icon library with consistent stroke weight and sizing.
+- Copy and content: QQQ metrics, completed results, capability practice, and learned instructions come from live APIs; zero states remain truthful and compact.
+- Interactions: assign-work navigation, learning-evidence expansion, all-capabilities expansion, and both ECharts render paths were exercised successfully.
+- Console errors: none.
+
+## Findings and History
+
+- Initial audit found large empty regions on Today Work and a sparse, upper-left-heavy Evolution page.
+- Fix: replaced oversized empty panels with compact action/status cards, real recent results, and a 7-day completion chart; added evolution KPIs, funnel, capability bar chart, recent practice, and dense learning records.
+- Post-fix evidence shows no actionable P0, P1, or P2 mismatch. Different page content is intentional; the selected source defines the shared visual system rather than identical labels.
+
+## Final Result
+
+passed
